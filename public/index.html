@@ -351,6 +351,8 @@
 let skills = []
 let tools = []
 let rules = {}
+let groupRules = {}
+let toolRules = {}
 let filter = 'all'
 let activeGroup = null   // null = 全部
 let collapsed = {}       // 分组折叠状态
@@ -364,6 +366,8 @@ async function load() {
     skills = data.skills
     tools = data.tools
     rules = data.rules || {}
+    groupRules = data.groupRules || {}
+    toolRules = data.toolRules || {}
     updateStats()
     render()
   } catch (e) {
@@ -425,7 +429,10 @@ function render() {
   }
 
   const grouped = groupSkills(list)
-  const toolHeaders = tools.map(t => `<th class="tool-col">${t}</th>`).join('')
+  const toolHeaders = tools.map(t => {
+    const isBlockedAll = toolRules[t]?.blockAll
+    return `<th class="tool-col" oncontextmenu="showToolCtxMenu(event,'${t}')" style="cursor:pointer" title="右键管理 ${t} 全局规则">${isBlockedAll ? '🔒 ' : ''}${t}</th>`
+  }).join('')
   const colspan = tools.length + 1
 
   let tbody = ''
@@ -438,7 +445,7 @@ function render() {
     const anyMissing = groupSkills.some(s => tools.some(t => s.status[t] === 'missing'))
 
     // 分组标题行
-    tbody += `<tr class="group-row" onclick="toggleGroup('${esc(group)}')">
+    tbody += `<tr class="group-row" onclick="toggleGroup('${esc(group)}')" oncontextmenu="showGroupCtxMenu(event,'${esc(group)}')">
       <td colspan="${colspan}">
         <div class="group-row-inner">
           <span class="group-row-name">${esc(group)}</span>
@@ -455,10 +462,10 @@ function render() {
         const statusCells = tools.map(tool => {
           const st = skill.status[tool]
           return `<td class="tool-cell"><span class="status-badge ${st}"
-            onclick="toggleLink('${esc(skill.name)}','${tool}','${st}')"
-            oncontextmenu="showCtxMenu(event,'${esc(skill.name)}','${tool}','${st}')"
-            title="${getTitle(st, skill.name, tool)}">
-            <span class="dot"></span>${getLabel(st)}
+            onclick="toggleLink('${esc(skill.name)}','${esc(skill.group)}','${tool}','${st}')"
+            oncontextmenu="showCtxMenu(event,'${esc(skill.name)}','${esc(skill.group)}','${tool}','${st}')"
+            title="${getTitle(st, skill.name, skill.group, tool)}">
+            <span class="dot"></span>${getLabel(st, skill.name, skill.group, tool)}
           </span></td>`
         }).join('')
         return `<tr>
@@ -500,23 +507,66 @@ function toggleGroup(group) {
   render()
 }
 
-function getLabel(st) {
-  return { linked: '已链接', missing: '未链接', directory: '实体目录', wrong: '链接错误', blocked: '已屏蔽' }[st] || st
+// 返回屏蔽原因级别：'tool' | 'group' | 'skill'
+function getBlockLevel(skillName, skillGroup, tool) {
+  if (toolRules[tool]?.blockAll) return 'tool'
+  const gr = groupRules[skillGroup]
+  if (gr) {
+    if (gr.exclude?.includes(tool)) return 'group'
+    if (gr.only && !gr.only.includes(tool)) return 'group'
+  }
+  return 'skill'
 }
-function getTitle(st, name, tool) {
+
+// 判断 skill/组 是否在全局屏蔽的白名单中（例外）
+function isToolAllowed(skillName, skillGroup, tool) {
+  const tr = toolRules[tool]
+  if (!tr?.blockAll) return false
+  return tr.allow?.includes(skillName) || tr.allowGroups?.includes(skillGroup)
+}
+
+function getLabel(st, name, group, tool) {
+  if (st !== 'blocked') return { linked: '已链接', missing: '未链接', directory: '实体目录', wrong: '链接错误' }[st] || st
+  const level = getBlockLevel(name, group, tool)
+  if (level === 'tool') return '全局屏蔽'
+  if (level === 'group') return '组屏蔽'
+  return '已屏蔽'
+}
+
+function getTitle(st, name, group, tool) {
+  if (st === 'blocked') {
+    const level = getBlockLevel(name, group, tool)
+    if (level === 'tool') return `${tool} 全局屏蔽中，点击为此 skill 开白名单 | 右键更多`
+    if (level === 'group') return `项目组 "${group}" 屏蔽了 ${tool}，右键管理`
+    return `已屏蔽：${name} 不允许链接到 ${tool}，点击解除`
+  }
+  const inAllowList = isToolAllowed(name, group, tool)
+  if (inAllowList) {
+    const suffix = ` | 🔓 白名单例外（${tool} 全局屏蔽中）`
+    if (st === 'linked') return `点击移除链接 | 右键更多操作` + suffix
+    if (st === 'missing') return `点击创建链接 | 右键更多操作` + suffix
+  }
   if (st === 'linked') return `点击移除链接 | 右键更多操作`
   if (st === 'missing') return `点击创建链接 | 右键更多操作`
   if (st === 'directory') return '实体目录，需手动处理'
   if (st === 'wrong') return '软链接指向错误路径，点击修复'
-  if (st === 'blocked') return `已屏蔽：${name} 不允许链接到 ${tool}，点击解除屏蔽`
   return ''
 }
 
-async function toggleLink(name, tool, status) {
+async function toggleLink(name, group, tool, status) {
   if (status === 'directory') return
   if (status === 'blocked') {
-    if (!confirm(`解除屏蔽：允许 "${name}" 链接到 ${tool}？`)) return
-    await setRule(name, tool, false)
+    const level = getBlockLevel(name, group, tool)
+    if (level === 'tool') {
+      if (!confirm(`为 "${name}" 开白名单：在 ${tool} 全局屏蔽中排除此 skill？`)) return
+      await allowTool(tool, 'skill', name, true)
+    } else if (level === 'group') {
+      if (!confirm(`解除组屏蔽：允许项目组 "${group}" 链接到 ${tool}？`)) return
+      await setGroupRule(group, tool, false)
+    } else {
+      if (!confirm(`解除屏蔽：允许 "${name}" 链接到 ${tool}？`)) return
+      await setSkillRule(name, tool, false)
+    }
     return
   }
   if (status === 'linked') {
@@ -536,7 +586,7 @@ async function toggleLink(name, tool, status) {
   await load()
 }
 
-async function setRule(name, tool, blocked) {
+async function setSkillRule(name, tool, blocked) {
   const r = await fetch(`/api/skills/${name}/rule`, {
     method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify({tool, blocked})
   })
@@ -544,8 +594,37 @@ async function setRule(name, tool, blocked) {
   toast(d.ok ? (blocked ? `已屏蔽 ${name} → ${tool}` : `已解除屏蔽 ${name} → ${tool}`) : d.error, d.ok ? 'ok' : 'err')
   await load()
 }
+const setRule = setSkillRule  // 向后兼容
 
-function showCtxMenu(e, name, tool, status) {
+async function setGroupRule(group, tool, blocked) {
+  const r = await fetch(`/api/groups/${encodeURIComponent(group)}/rule`, {
+    method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify({tool, blocked})
+  })
+  const d = await r.json()
+  toast(d.ok ? (blocked ? `已屏蔽组 ${group} → ${tool}` : `已解除 ${group} 对 ${tool} 的屏蔽`) : d.error, d.ok ? 'ok' : 'err')
+  await load()
+}
+
+async function allowTool(tool, type, name, allowed) {
+  const r = await fetch(`/api/tools/${encodeURIComponent(tool)}/allow`, {
+    method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify({type, name, allowed})
+  })
+  const d = await r.json()
+  const action = allowed ? `已开白名单` : `已移除白名单`
+  toast(d.ok ? `${action}: ${name} → ${tool}` : d.error, d.ok ? 'ok' : 'err')
+  await load()
+}
+
+async function setToolRule(tool, blockAll) {
+  const r = await fetch(`/api/tools/${encodeURIComponent(tool)}/rule`, {
+    method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify({blockAll})
+  })
+  const d = await r.json()
+  toast(d.ok ? (blockAll ? `已全局屏蔽 ${tool}` : `已解除 ${tool} 全局屏蔽`) : d.error, d.ok ? 'ok' : 'err')
+  await load()
+}
+
+function showCtxMenu(e, name, group, tool, status) {
   e.preventDefault()
   e.stopPropagation()
   const menu = document.getElementById('ctx-menu')
@@ -553,19 +632,90 @@ function showCtxMenu(e, name, tool, status) {
   const isLinked = status === 'linked'
   let html = ''
   if (isBlocked) {
-    html += `<div class="ctx-item" onclick="closeCtxMenu();setRule('${esc(name)}','${tool}',false)">🔓 解除屏蔽</div>`
+    const level = getBlockLevel(name, group, tool)
+    if (level === 'tool') {
+      html += `<div class="ctx-item" onclick="closeCtxMenu();allowTool('${tool}','skill','${esc(name)}',true)">🔓 为此 skill 开白名单</div>`
+      html += `<div class="ctx-item" onclick="closeCtxMenu();allowTool('${tool}','group','${esc(group)}',true)">🔓 为整组 ${esc(group)} 开白名单</div>`
+      html += `<div class="ctx-sep"></div>`
+      html += `<div class="ctx-item" onclick="closeCtxMenu();setToolRule('${tool}',false)">🔓 解除 ${tool} 全局屏蔽</div>`
+    } else if (level === 'group') {
+      html += `<div class="ctx-item" onclick="closeCtxMenu();setGroupRule('${esc(group)}','${tool}',false)">🔓 解除组屏蔽（${esc(group)}）</div>`
+      html += `<div class="ctx-sep"></div>`
+      html += `<div class="ctx-item danger" onclick="closeCtxMenu();confirmBlockTool('${tool}')">🔒 全局屏蔽 ${tool}</div>`
+    } else {
+      html += `<div class="ctx-item" onclick="closeCtxMenu();setSkillRule('${esc(name)}','${tool}',false)">🔓 解除屏蔽</div>`
+      html += `<div class="ctx-sep"></div>`
+      html += `<div class="ctx-item" onclick="closeCtxMenu();confirmBlockGroup('${esc(group)}','${tool}')">🔒 屏蔽整组 ${esc(group)}</div>`
+      html += `<div class="ctx-item danger" onclick="closeCtxMenu();confirmBlockTool('${tool}')">🔒 全局屏蔽 ${tool}</div>`
+    }
   } else {
     if (isLinked) {
-      html += `<div class="ctx-item" onclick="closeCtxMenu();toggleLink('${esc(name)}','${tool}','linked')">✕ 移除链接</div>`
+      html += `<div class="ctx-item" onclick="closeCtxMenu();toggleLink('${esc(name)}','${esc(group)}','${tool}','linked')">✕ 移除链接</div>`
       html += `<div class="ctx-sep"></div>`
     } else if (status === 'missing') {
-      html += `<div class="ctx-item" onclick="closeCtxMenu();toggleLink('${esc(name)}','${tool}','missing')">＋ 创建链接</div>`
+      html += `<div class="ctx-item" onclick="closeCtxMenu();toggleLink('${esc(name)}','${esc(group)}','${tool}','missing')">＋ 创建链接</div>`
       html += `<div class="ctx-sep"></div>`
     }
-    html += `<div class="ctx-item danger" onclick="closeCtxMenu();confirmBlock('${esc(name)}','${tool}')">🔒 屏蔽此工具</div>`
+    html += `<div class="ctx-item danger" onclick="closeCtxMenu();confirmBlock('${esc(name)}','${esc(group)}','${tool}')">🔒 屏蔽此 skill</div>`
+    html += `<div class="ctx-item danger" onclick="closeCtxMenu();confirmBlockGroup('${esc(group)}','${tool}')">🔒 屏蔽整组 ${esc(group)}</div>`
+    html += `<div class="ctx-item danger" onclick="closeCtxMenu();confirmBlockTool('${tool}')">🔒 全局屏蔽 ${tool}</div>`
   }
   menu.innerHTML = html
-  menu.style.left = Math.min(e.clientX, window.innerWidth - 180) + 'px'
+  menu.style.left = Math.min(e.clientX, window.innerWidth - 200) + 'px'
+  menu.style.top = Math.min(e.clientY, window.innerHeight - 150) + 'px'
+  menu.classList.add('show')
+}
+
+function showGroupCtxMenu(e, group) {
+  e.preventDefault()
+  e.stopPropagation()
+  const menu = document.getElementById('ctx-menu')
+  let html = `<div style="padding:6px 12px 4px;font-size:11px;color:var(--muted);font-weight:600">项目组: ${esc(group)}</div>`
+  html += `<div class="ctx-sep"></div>`
+  for (const tool of tools) {
+    const gr = groupRules[group]
+    const isGroupBlocked = gr && (gr.exclude?.includes(tool) || (gr.only && !gr.only.includes(tool)))
+    const isToolBlocked = toolRules[tool]?.blockAll
+    const isGroupAllowed = toolRules[tool]?.allowGroups?.includes(group)
+
+    if (isToolBlocked) {
+      if (isGroupAllowed) {
+        html += `<div class="ctx-item" onclick="closeCtxMenu();allowTool('${tool}','group','${esc(group)}',false)">🔒 移除白名单 → ${tool}</div>`
+      } else {
+        html += `<div class="ctx-item" onclick="closeCtxMenu();allowTool('${tool}','group','${esc(group)}',true)">🔓 开白名单 → ${tool}（全局屏蔽中）</div>`
+      }
+    } else if (isGroupBlocked) {
+      html += `<div class="ctx-item" onclick="closeCtxMenu();setGroupRule('${esc(group)}','${tool}',false)">🔓 解除屏蔽 → ${tool}</div>`
+    } else {
+      html += `<div class="ctx-item danger" onclick="closeCtxMenu();confirmBlockGroup('${esc(group)}','${tool}')">🔒 屏蔽 → ${tool}</div>`
+    }
+  }
+  menu.innerHTML = html
+  menu.style.left = Math.min(e.clientX, window.innerWidth - 200) + 'px'
+  menu.style.top = Math.min(e.clientY, window.innerHeight - 160) + 'px'
+  menu.classList.add('show')
+}
+
+function showToolCtxMenu(e, tool) {
+  e.preventDefault()
+  e.stopPropagation()
+  const menu = document.getElementById('ctx-menu')
+  const tr = toolRules[tool]
+  const isBlocked = tr?.blockAll
+  const allowCount = (tr?.allow?.length || 0) + (tr?.allowGroups?.length || 0)
+  let html = `<div style="padding:6px 12px 4px;font-size:11px;color:var(--muted);font-weight:600">Agent: ${esc(tool)}</div>`
+  html += `<div class="ctx-sep"></div>`
+  if (isBlocked) {
+    if (allowCount > 0) {
+      html += `<div style="padding:4px 12px;font-size:11px;color:var(--accent)">🔓 白名单例外: ${allowCount} 项</div>`
+      html += `<div class="ctx-sep"></div>`
+    }
+    html += `<div class="ctx-item" onclick="closeCtxMenu();setToolRule('${tool}',false)">🔓 解除全局屏蔽</div>`
+  } else {
+    html += `<div class="ctx-item danger" onclick="closeCtxMenu();confirmBlockTool('${tool}')">🔒 全局屏蔽（禁止所有 skill）</div>`
+  }
+  menu.innerHTML = html
+  menu.style.left = Math.min(e.clientX, window.innerWidth - 200) + 'px'
   menu.style.top = Math.min(e.clientY, window.innerHeight - 120) + 'px'
   menu.classList.add('show')
 }
@@ -574,9 +724,21 @@ function closeCtxMenu() {
   document.getElementById('ctx-menu').classList.remove('show')
 }
 
-async function confirmBlock(name, tool) {
+async function confirmBlock(name, group, tool) {
   if (!confirm(`屏蔽：禁止 "${name}" 链接到 ${tool}？\n（已有链接将自动移除）`)) return
-  await setRule(name, tool, true)
+  await setSkillRule(name, tool, true)
+}
+
+async function confirmBlockGroup(group, tool) {
+  const count = skills.filter(s => s.group === group).length
+  if (!confirm(`屏蔽整组：禁止 "${group}" 组的所有 ${count} 个 skill 链接到 ${tool}？\n（已有链接将自动移除）`)) return
+  await setGroupRule(group, tool, true)
+}
+
+async function confirmBlockTool(tool) {
+  const linked = skills.filter(s => s.status[tool] === 'linked').length
+  if (!confirm(`全局屏蔽：禁止 ${tool} 链接所有 skill？\n（将自动移除 ${linked} 个已有链接）`)) return
+  await setToolRule(tool, true)
 }
 
 document.addEventListener('click', closeCtxMenu)

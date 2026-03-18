@@ -41,8 +41,10 @@ function loadConfig() {
   )
 
   const rules = base.rules || {}
+  const groupRules = base.groupRules || {}
+  const toolRules = base.toolRules || {}
 
-  return { skillsDirs, tools, excludeProjects, rules }
+  return { skillsDirs, tools, excludeProjects, rules, groupRules, toolRules }
 }
 
 let config = loadConfig()
@@ -50,14 +52,41 @@ let SKILLS_DIRS = config.skillsDirs
 let TOOLS = config.tools
 let EXCLUDE_PROJECTS = config.excludeProjects
 let RULES = config.rules
+let GROUP_RULES = config.groupRules
+let TOOL_RULES = config.toolRules
 
-// 判断某个 skill 是否允许链接到某个工具
-function isAllowed(skillName, tool) {
+// 判断某个 skill 是否允许链接到某个工具（三级优先级：tool > group > skill）
+function isAllowed(skillName, tool, group) {
+  // 1. Agent 全局屏蔽（白名单例外优先）
+  const toolRule = TOOL_RULES[tool]
+  if (toolRule && toolRule.blockAll) {
+    if (toolRule.allow?.includes(skillName)) return true
+    if (toolRule.allowGroups?.includes(group)) return true
+    return false
+  }
+
+  // 2. 项目组屏蔽
+  if (group) {
+    const groupRule = GROUP_RULES[group]
+    if (groupRule) {
+      if (groupRule.only && !groupRule.only.includes(tool)) return false
+      if (groupRule.exclude && groupRule.exclude.includes(tool)) return false
+    }
+  }
+
+  // 3. Skill 级别屏蔽
   const rule = RULES[skillName]
   if (!rule) return true
   if (rule.only) return rule.only.includes(tool)
   if (rule.exclude) return !rule.exclude.includes(tool)
   return true
+}
+
+// 获取 skill 所属的项目组名
+function getSkillGroup(skillDir) {
+  const baseDir = SKILLS_DIRS.find(d => skillDir.startsWith(d + path.sep) || skillDir === d) || SKILLS_DIRS[0]
+  const rel = path.relative(baseDir, skillDir)
+  return rel.split(path.sep)[0]
 }
 
 // 将 rules 写回 tools.json
@@ -66,6 +95,20 @@ function saveRules(rules) {
   raw.rules = rules
   fs.writeFileSync(CONFIG_PATH, JSON.stringify(raw, null, 2) + '\n')
   RULES = rules
+}
+
+function saveGroupRules(groupRules) {
+  const raw = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'))
+  raw.groupRules = groupRules
+  fs.writeFileSync(CONFIG_PATH, JSON.stringify(raw, null, 2) + '\n')
+  GROUP_RULES = groupRules
+}
+
+function saveToolRules(toolRules) {
+  const raw = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'))
+  raw.toolRules = toolRules
+  fs.writeFileSync(CONFIG_PATH, JSON.stringify(raw, null, 2) + '\n')
+  TOOL_RULES = toolRules
 }
 
 // ── 扫描逻辑 ──────────────────────────────────────────────────────────────────
@@ -99,10 +142,12 @@ function findSkillDirs() {
 
 function getSkillStatus(skillDir) {
   const name = path.basename(skillDir)
+  const group = getSkillGroup(skillDir)
+  const standalone = group === name
   const status = {}
 
   for (const [tool, toolDir] of Object.entries(TOOLS)) {
-    if (!isAllowed(name, tool)) {
+    if (!isAllowed(name, tool, group)) {
       status[tool] = 'blocked'
       continue
     }
@@ -130,11 +175,6 @@ function getSkillStatus(skillDir) {
     if (description.length > 80) description = description.slice(0, 77) + '...'
   } catch {}
 
-  const baseDir = SKILLS_DIRS.find(d => skillDir.startsWith(d + path.sep) || skillDir === d) || SKILLS_DIRS[0]
-  const rel = path.relative(baseDir, skillDir)
-  const group = rel.split(path.sep)[0]
-  const standalone = group === path.basename(skillDir)
-
   return { name, path: skillDir, description, status, group, standalone }
 }
 
@@ -144,7 +184,7 @@ app.get('/api/skills', (req, res) => {
   try {
     const dirs = findSkillDirs()
     const skills = dirs.map(getSkillStatus)
-    res.json({ skills, tools: Object.keys(TOOLS), rules: RULES })
+    res.json({ skills, tools: Object.keys(TOOLS), rules: RULES, groupRules: GROUP_RULES, toolRules: TOOL_RULES })
   } catch (err) {
     res.status(500).json({ error: err.message })
   }
@@ -156,11 +196,13 @@ app.post('/api/skills/:name/link', (req, res) => {
   const { tool } = req.body
 
   if (!TOOLS[tool]) return res.status(400).json({ error: '未知工具: ' + tool })
-  if (!isAllowed(name, tool)) return res.status(403).json({ error: `${name} 已被规则限制，不允许链接到 ${tool}` })
 
   const dirs = findSkillDirs()
   const skillDir = dirs.find(d => path.basename(d) === name)
   if (!skillDir) return res.status(404).json({ error: '未找到 skill: ' + name })
+
+  const group = getSkillGroup(skillDir)
+  if (!isAllowed(name, tool, group)) return res.status(403).json({ error: `${name} 已被规则限制，不允许链接到 ${tool}` })
 
   const toolDir = TOOLS[tool]
   const target = path.join(toolDir, name)
@@ -252,21 +294,220 @@ app.put('/api/skills/:name/rule', (req, res) => {
   }
 })
 
-// 全量同步
+// 设置项目组规则
+app.put('/api/groups/:group/rule', (req, res) => {
+  const { group } = req.params
+  const { tool, blocked } = req.body
+
+  if (!TOOLS[tool]) return res.status(400).json({ error: '未知工具: ' + tool })
+
+  const groupRules = { ...GROUP_RULES }
+  const allTools = Object.keys(TOOLS)
+
+  if (blocked) {
+    const existing = groupRules[group] || {}
+    const excludeSet = new Set(existing.exclude || [])
+    excludeSet.add(tool)
+    const excluded = [...excludeSet]
+    const allowed = allTools.filter(t => !excluded.includes(t))
+    groupRules[group] = allowed.length < excluded.length ? { only: allowed } : { exclude: excluded }
+
+    // 移除该组下所有 skill 在此工具的软链接
+    const dirs = findSkillDirs()
+    for (const skillDir of dirs) {
+      if (getSkillGroup(skillDir) === group) {
+        try {
+          const target = path.join(TOOLS[tool], path.basename(skillDir))
+          const stat = fs.lstatSync(target)
+          if (stat.isSymbolicLink()) fs.unlinkSync(target)
+        } catch {}
+      }
+    }
+  } else {
+    const existing = groupRules[group]
+    if (existing) {
+      if (existing.exclude) {
+        const newExclude = existing.exclude.filter(t => t !== tool)
+        if (newExclude.length === 0) delete groupRules[group]
+        else groupRules[group] = { exclude: newExclude }
+      } else if (existing.only) {
+        const newOnly = [...existing.only, tool]
+        if (newOnly.length >= allTools.length) delete groupRules[group]
+        else groupRules[group] = { only: newOnly }
+      }
+    }
+  }
+
+  try {
+    saveGroupRules(groupRules)
+    res.json({ ok: true, groupRules })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// 设置 agent 全局规则（屏蔽所有 skill）
+app.put('/api/tools/:tool/rule', (req, res) => {
+  const { tool } = req.params
+  const { blockAll } = req.body
+
+  if (!TOOLS[tool]) return res.status(400).json({ error: '未知工具: ' + tool })
+
+  const toolRules = { ...TOOL_RULES }
+
+  if (blockAll) {
+    toolRules[tool] = { blockAll: true }
+    // 移除该工具的所有软链接
+    const toolDir = TOOLS[tool]
+    try {
+      const entries = fs.readdirSync(toolDir, { withFileTypes: true })
+      for (const entry of entries) {
+        if (entry.isSymbolicLink()) {
+          try { fs.unlinkSync(path.join(toolDir, entry.name)) } catch {}
+        }
+      }
+    } catch {}
+  } else {
+    delete toolRules[tool]
+  }
+
+  try {
+    saveToolRules(toolRules)
+    res.json({ ok: true, toolRules })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// 在全局屏蔽中为单个 skill 或组开白名单（例外）
+app.put('/api/tools/:tool/allow', (req, res) => {
+  const { tool } = req.params
+  const { type, name, allowed } = req.body   // type: 'skill'|'group', name, allowed: bool
+
+  if (!TOOLS[tool]) return res.status(400).json({ error: '未知工具: ' + tool })
+  if (!['skill', 'group'].includes(type)) return res.status(400).json({ error: 'type 必须是 skill 或 group' })
+
+  const toolRules = { ...TOOL_RULES }
+  const rule = { ...(toolRules[tool] || {}) }
+  const field = type === 'skill' ? 'allow' : 'allowGroups'
+  const list = new Set(rule[field] || [])
+
+  if (allowed) {
+    list.add(name)
+  } else {
+    list.delete(name)
+  }
+
+  if (list.size > 0) {
+    rule[field] = [...list]
+  } else {
+    delete rule[field]
+  }
+  toolRules[tool] = rule
+
+  try {
+    saveToolRules(toolRules)
+    res.json({ ok: true, toolRules })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// 全量同步（服务端实现，完整应用三级屏蔽规则）
 app.post('/api/sync', (req, res) => {
-  const scriptPath = path.join(__dirname, 'skill-sync.sh')
-  if (!fs.existsSync(scriptPath)) return res.status(404).json({ error: '未找到 skill-sync.sh' })
-  exec(`bash "${scriptPath}" sync 2>&1`, { timeout: 30000 }, (err, stdout) => {
-    res.json({ ok: !err, output: stdout, error: err ? err.message : null })
-  })
+  const dirs = findSkillDirs()
+  const log = []
+  let created = 0, skipped = 0, blocked = 0, warned = 0
+
+  // 检测名称冲突
+  const seen = {}
+  for (const skillDir of dirs) {
+    const name = path.basename(skillDir)
+    if (seen[name]) {
+      log.push(`[warn]  名称冲突: "${name}"，跳过 ${skillDir}`)
+      warned++
+    } else {
+      seen[name] = skillDir
+    }
+  }
+
+  for (const skillDir of dirs) {
+    const name = path.basename(skillDir)
+    if (seen[name] !== skillDir) continue   // 跳过冲突项
+
+    const group = getSkillGroup(skillDir)
+
+    for (const [tool, toolDir] of Object.entries(TOOLS)) {
+      if (!isAllowed(name, tool, group)) {
+        blocked++
+        continue
+      }
+
+      const target = path.join(toolDir, name)
+      try {
+        fs.mkdirSync(toolDir, { recursive: true })
+      } catch {}
+
+      try {
+        const stat = fs.lstatSync(target)
+        if (stat.isSymbolicLink()) {
+          const resolved = path.resolve(path.dirname(target), fs.readlinkSync(target))
+          if (resolved === skillDir) {
+            skipped++
+          } else {
+            log.push(`[warn]  ${tool}/${name} 指向不同路径，跳过（请手动处理）`)
+            warned++
+          }
+        } else {
+          log.push(`[warn]  ${tool}/${name} 已存在（非软链接），跳过`)
+          warned++
+        }
+      } catch {
+        try {
+          fs.symlinkSync(skillDir, target)
+          created++
+          log.push(`[ok]    新建 ${tool}/${name}`)
+        } catch (err) {
+          log.push(`[err]   ${tool}/${name}: ${err.message}`)
+          warned++
+        }
+      }
+    }
+  }
+
+  log.push(`\n完成: 新建 ${created}，已有 ${skipped}，屏蔽跳过 ${blocked}，警告 ${warned}`)
+  res.json({ ok: true, output: log.join('\n') })
 })
 
 // 清理失效链接
 app.post('/api/clean', (req, res) => {
-  const scriptPath = path.join(__dirname, 'skill-sync.sh')
-  exec(`bash "${scriptPath}" clean 2>&1`, { timeout: 10000 }, (err, stdout) => {
-    res.json({ ok: !err, output: stdout, error: err ? err.message : null })
-  })
+  const log = []
+  let cleaned = 0
+
+  for (const [tool, toolDir] of Object.entries(TOOLS)) {
+    let entries
+    try { entries = fs.readdirSync(toolDir, { withFileTypes: true }) }
+    catch { continue }
+
+    for (const entry of entries) {
+      if (!entry.isSymbolicLink()) continue
+      const target = path.join(toolDir, entry.name)
+      try {
+        fs.statSync(target)  // 如果 target 不存在会抛异常
+      } catch {
+        try {
+          fs.unlinkSync(target)
+          cleaned++
+          log.push(`[ok]    删除失效链接: ${tool}/${entry.name}`)
+        } catch (err) {
+          log.push(`[err]   ${tool}/${entry.name}: ${err.message}`)
+        }
+      }
+    }
+  }
+
+  log.push(`\n清理完成，删除 ${cleaned} 个失效链接`)
+  res.json({ ok: true, output: log.join('\n') })
 })
 
 app.listen(PORT, () => {
