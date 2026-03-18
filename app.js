@@ -53,11 +53,12 @@ function loadConfig() {
   const groupRules = base.groupRules || {}
   const toolRules = base.toolRules || {}
   const deletedSkills = new Set(base.deletedSkills || [])
+  const manualUnlinks = base.manualUnlinks || {}
 
-  return { skillsDirs, skillsDirGroups, tools, excludeProjects, rules, groupRules, toolRules, deletedSkills }
+  return { skillsDirs, skillsDirGroups, tools, excludeProjects, rules, groupRules, toolRules, deletedSkills, manualUnlinks }
 }
 
-let SKILLS_DIRS, SKILLS_DIR_GROUPS, TOOLS, EXCLUDE_PROJECTS, RULES, GROUP_RULES, TOOL_RULES, DELETED_SKILLS
+let SKILLS_DIRS, SKILLS_DIR_GROUPS, TOOLS, EXCLUDE_PROJECTS, RULES, GROUP_RULES, TOOL_RULES, DELETED_SKILLS, MANUAL_UNLINKS
 
 function reloadConfig() {
   const config = loadConfig()
@@ -69,6 +70,7 @@ function reloadConfig() {
   GROUP_RULES = config.groupRules
   TOOL_RULES = config.toolRules
   DELETED_SKILLS = config.deletedSkills
+  MANUAL_UNLINKS = config.manualUnlinks
 }
 
 reloadConfig()
@@ -114,6 +116,29 @@ function saveDeletedSkills(deletedSkills) {
   DELETED_SKILLS = deletedSkills
 }
 
+function saveManualUnlinks(manualUnlinks) {
+  const raw = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'))
+  // Omit the key entirely when empty to keep config clean
+  const clean = Object.fromEntries(Object.entries(manualUnlinks).filter(([, tools]) => tools.length > 0))
+  if (Object.keys(clean).length > 0) raw.manualUnlinks = clean
+  else delete raw.manualUnlinks
+  fs.writeFileSync(CONFIG_PATH, JSON.stringify(raw, null, 2) + '\n')
+  MANUAL_UNLINKS = clean
+}
+
+function addManualUnlink(name, tool) {
+  const updated = { ...MANUAL_UNLINKS }
+  updated[name] = [...new Set([...(updated[name] || []), tool])]
+  saveManualUnlinks(updated)
+}
+
+function removeManualUnlink(name, tool) {
+  if (!MANUAL_UNLINKS[name]) return
+  const updated = { ...MANUAL_UNLINKS }
+  updated[name] = updated[name].filter(t => t !== tool)
+  saveManualUnlinks(updated)
+}
+
 // ── Internal helpers using current config state ────────────────────────────────
 
 function _isAllowed(skillName, tool, group) {
@@ -157,7 +182,7 @@ function getSkillStatus(skillDir) {
         status[tool] = 'directory'
       }
     } catch {
-      status[tool] = 'missing'
+      status[tool] = MANUAL_UNLINKS[name]?.includes(tool) ? 'manual' : 'missing'
     }
   }
 
@@ -208,6 +233,13 @@ function doDeleteSkill(name, hardDelete) {
   const deletedSkills = new Set(DELETED_SKILLS)
   deletedSkills.add(name)
   saveDeletedSkills(deletedSkills)
+
+  // Clean up any manual-unlink records for this skill
+  if (MANUAL_UNLINKS[name]) {
+    const updated = { ...MANUAL_UNLINKS }
+    delete updated[name]
+    saveManualUnlinks(updated)
+  }
 
   // Hard-delete: remove the real directory
   if (hardDelete) {
@@ -310,6 +342,7 @@ app.post('/api/skills/:name/link', (req, res) => {
       else return res.status(409).json({ error: '目标已存在且非软链接，请手动处理' })
     } catch {}
     fs.symlinkSync(skillDir, target)
+    removeManualUnlink(name, tool)
     res.json({ ok: true, message: `已链接 ${tool}/${name}` })
   } catch (err) {
     res.status(500).json({ error: err.message })
@@ -327,6 +360,7 @@ app.delete('/api/skills/:name/link', (req, res) => {
     const stat = fs.lstatSync(target)
     if (!stat.isSymbolicLink()) return res.status(409).json({ error: '非软链接，不能删除' })
     fs.unlinkSync(target)
+    addManualUnlink(name, tool)
     res.json({ ok: true, message: `已移除 ${tool}/${name}` })
   } catch (err) {
     res.status(500).json({ error: err.message })
@@ -525,7 +559,7 @@ app.put('/api/tools/:tool/allow', (req, res) => {
 app.post('/api/sync', (req, res) => {
   const dirs = _findSkillDirs()
   const log = []
-  let created = 0, skipped = 0, blocked = 0, warned = 0
+  let created = 0, skipped = 0, blocked = 0, manual = 0, warned = 0
 
   const seen = {}
   for (const skillDir of dirs) {
@@ -547,6 +581,11 @@ app.post('/api/sync', (req, res) => {
     for (const [tool, toolDir] of Object.entries(TOOLS)) {
       if (!_isAllowed(name, tool, group)) {
         blocked++
+        continue
+      }
+
+      if (MANUAL_UNLINKS[name]?.includes(tool)) {
+        manual++
         continue
       }
 
@@ -580,7 +619,10 @@ app.post('/api/sync', (req, res) => {
     }
   }
 
-  log.push(`\n完成: 新建 ${created}，已有 ${skipped}，屏蔽跳过 ${blocked}，警告 ${warned}`)
+  const parts = [`新建 ${created}`, `已有 ${skipped}`, `屏蔽跳过 ${blocked}`]
+  if (manual > 0) parts.push(`手动跳过 ${manual}`)
+  if (warned > 0) parts.push(`警告 ${warned}`)
+  log.push(`\n完成: ${parts.join('，')}`)
   res.json({ ok: true, output: log.join('\n') })
 })
 
@@ -631,6 +673,7 @@ app.post('/api/batch/link', (req, res) => {
       fs.mkdirSync(TOOLS[tool], { recursive: true })
       try { if (fs.lstatSync(target).isSymbolicLink()) fs.unlinkSync(target) } catch {}
       fs.symlinkSync(skillDir, target)
+      removeManualUnlink(name, tool)
       return { name, tool, ok: true }
     } catch (err) {
       return { name, tool, ok: false, error: err.message }
@@ -650,6 +693,7 @@ app.post('/api/batch/unlink', (req, res) => {
     try {
       if (!fs.lstatSync(target).isSymbolicLink()) return { name, tool, ok: false, error: '非软链接' }
       fs.unlinkSync(target)
+      addManualUnlink(name, tool)
       return { name, tool, ok: true }
     } catch {
       return { name, tool, ok: false, error: '链接不存在' }

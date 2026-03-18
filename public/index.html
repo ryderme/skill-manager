@@ -248,6 +248,8 @@
     .status-badge.wrong { background: rgba(239,68,68,0.1); color: var(--red); border-color: rgba(239,68,68,0.3); }
     .status-badge.blocked { background: rgba(107,114,128,0.08); color: #4b5563; border-color: #374151; cursor: pointer; }
     .status-badge.blocked:hover { background: rgba(99,102,241,0.08); color: #6b7280; border-color: rgba(99,102,241,0.3); }
+    .status-badge.manual { background: rgba(245,158,11,0.08); color: #92400e; border-color: rgba(245,158,11,0.25); }
+    .status-badge.manual:hover { background: rgba(99,102,241,0.12); color: var(--accent); border-color: rgba(99,102,241,0.3); }
     .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 
     /* Context menu */
@@ -645,7 +647,7 @@ function isToolAllowed(skillName, skillGroup, tool) {
 }
 
 function getLabel(st, name, group, tool) {
-  if (st !== 'blocked') return { linked: '已链接', missing: '未链接', directory: '实体目录', wrong: '链接错误' }[st] || st
+  if (st !== 'blocked') return { linked: '已链接', missing: '未链接', manual: '手动断开', directory: '实体目录', wrong: '链接错误' }[st] || st
   const level = getBlockLevel(name, group, tool)
   if (level === 'tool') return '全局屏蔽'
   if (level === 'group') return '组屏蔽'
@@ -667,6 +669,7 @@ function getTitle(st, name, group, tool) {
   }
   if (st === 'linked') return `点击移除链接 | 右键更多操作`
   if (st === 'missing') return `点击创建链接 | 右键更多操作`
+  if (st === 'manual') return `手动断开：同步时不会自动恢复 | 点击重新链接`
   if (st === 'directory') return '实体目录，需手动处理'
   if (st === 'wrong') return '软链接指向错误路径，点击修复'
   return ''
@@ -788,8 +791,8 @@ function showCtxMenu(e, name, group, tool, status) {
     if (isLinked) {
       html += `<div class="ctx-item" onclick="closeCtxMenu();toggleLink('${esc(name)}','${esc(group)}','${tool}','linked')">✕ 移除链接</div>`
       html += `<div class="ctx-sep"></div>`
-    } else if (status === 'missing') {
-      html += `<div class="ctx-item" onclick="closeCtxMenu();toggleLink('${esc(name)}','${esc(group)}','${tool}','missing')">＋ 创建链接</div>`
+    } else if (status === 'missing' || status === 'manual') {
+      html += `<div class="ctx-item" onclick="closeCtxMenu();toggleLink('${esc(name)}','${esc(group)}','${tool}','${status}')">＋ 创建链接</div>`
       html += `<div class="ctx-sep"></div>`
     }
     html += `<div class="ctx-item danger" onclick="closeCtxMenu();confirmBlock('${esc(name)}','${esc(group)}','${tool}')">🔒 屏蔽此 skill</div>`
