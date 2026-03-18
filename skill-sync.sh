@@ -1,6 +1,7 @@
 #!/bin/bash
 # skill-sync.sh — 统一 skill 软链接管理器
-# 自动发现 ~/github 下所有 SKILL.md，为 openclaw / claudecode / codex 创建软链接
+# 自动发现 SKILLS_DIR 下所有 SKILL.md，为各工具创建软链接
+# 工具列表从 tools.json 读取，添加新工具只需编辑该文件
 #
 # 用法:
 #   ./skill-sync.sh          # 同步所有 skill
@@ -9,19 +10,46 @@
 
 set -euo pipefail
 
-# ── 配置 ──────────────────────────────────────────────────────────────────────
+# ── 配置（从 tools.json 读取） ────────────────────────────────────────────────
 
-GITHUB_DIR="${SKILLS_DIR:-$HOME/github}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CONFIG_FILE="$SCRIPT_DIR/tools.json"
 
-# 要同步的工具目录（可通过环境变量覆盖）
-declare -A TOOL_DIRS=(
-  [openclaw]="${OPENCLAW_SKILLS:-$HOME/.openclaw/skills}"
-  [claudecode]="${CLAUDECODE_SKILLS:-$HOME/.claude/skills}"
-  [codex]="${CODEX_SKILLS:-$HOME/.codex/skills}"
-)
+if [[ ! -f "$CONFIG_FILE" ]]; then
+  echo "错误: 未找到 $CONFIG_FILE" >&2
+  exit 1
+fi
 
-# 排除的项目（可通过环境变量覆盖，逗号分隔）
-IFS=',' read -ra EXCLUDE_PROJECTS <<< "${EXCLUDE_PROJECTS:-everything-claude-code,skill-manager}"
+if ! command -v python3 &>/dev/null; then
+  echo "错误: 需要 python3 来解析 tools.json" >&2
+  exit 1
+fi
+
+expand_home() {
+  echo "${1/\~/$HOME}"
+}
+
+# 读取 tools.json
+_RAW_SKILLS_DIR=$(python3 -c "import json; d=json.load(open('$CONFIG_FILE')); print(d.get('skillsDir','~/github'))")
+_RAW_EXCLUDES=$(python3 -c "import json; d=json.load(open('$CONFIG_FILE')); print(','.join(d.get('excludeProjects',[])))")
+
+GITHUB_DIR=$(expand_home "${SKILLS_DIR:-$_RAW_SKILLS_DIR}")
+
+# 构建 TOOL_DIRS（环境变量优先于 tools.json）
+declare -A TOOL_DIRS=()
+while IFS='=' read -r name dir; do
+  env_key="${name^^}_SKILLS"
+  resolved="${!env_key:-$(expand_home "$dir")}"
+  TOOL_DIRS[$name]="$resolved"
+done < <(python3 -c "
+import json
+d = json.load(open('$CONFIG_FILE'))
+for k, v in d.get('tools', {}).items():
+    print(f'{k}={v}')
+")
+
+# 排除列表（环境变量优先）
+IFS=',' read -ra EXCLUDE_PROJECTS <<< "${EXCLUDE_PROJECTS:-$_RAW_EXCLUDES}"
 
 # ── 颜色 ──────────────────────────────────────────────────────────────────────
 

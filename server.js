@@ -12,20 +12,39 @@ app.use(express.static(path.join(__dirname, 'public')))
 // ── 配置 ──────────────────────────────────────────────────────────────────────
 
 const HOME = process.env.HOME
-const GITHUB_DIR = process.env.SKILLS_DIR || path.join(HOME, 'github')
 
-const TOOLS = {
-  openclaw:   process.env.OPENCLAW_SKILLS  || path.join(HOME, '.openclaw/skills'),
-  claudecode: process.env.CLAUDECODE_SKILLS || path.join(HOME, '.claude/skills'),
-  codex:      process.env.CODEX_SKILLS     || path.join(HOME, '.codex/skills'),
+function expandHome(p) {
+  return p.startsWith('~/') ? path.join(HOME, p.slice(2)) : p
 }
 
-// 排除不扫描的项目（逗号分隔，或使用默认值）
-const EXCLUDE_PROJECTS = new Set(
-  process.env.EXCLUDE_PROJECTS
-    ? process.env.EXCLUDE_PROJECTS.split(',').map(s => s.trim())
-    : ['everything-claude-code', 'skill-manager']
-)
+function loadConfig() {
+  const configPath = path.join(__dirname, 'tools.json')
+  const base = JSON.parse(fs.readFileSync(configPath, 'utf8'))
+
+  const skillsDir = process.env.SKILLS_DIR
+    ? expandHome(process.env.SKILLS_DIR)
+    : expandHome(base.skillsDir || '~/github')
+
+  // 合并 tools.json 和环境变量（环境变量优先）
+  const tools = {}
+  for (const [name, dir] of Object.entries(base.tools || {})) {
+    const envKey = name.toUpperCase() + '_SKILLS'
+    tools[name] = process.env[envKey] ? expandHome(process.env[envKey]) : expandHome(dir)
+  }
+
+  const excludeProjects = new Set(
+    process.env.EXCLUDE_PROJECTS
+      ? process.env.EXCLUDE_PROJECTS.split(',').map(s => s.trim())
+      : (base.excludeProjects || [])
+  )
+
+  return { skillsDir, tools, excludeProjects }
+}
+
+const config = loadConfig()
+const GITHUB_DIR = config.skillsDir
+const TOOLS = config.tools
+const EXCLUDE_PROJECTS = config.excludeProjects
 
 // ── 扫描逻辑 ──────────────────────────────────────────────────────────────────
 

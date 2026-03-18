@@ -1,0 +1,9 @@
+{
+  "tools": {
+    "openclaw":   "~/.openclaw/skills",
+    "claudecode": "~/.claude/skills",
+    "codex":      "~/.codex/skills"
+  },
+  "skillsDir": "~/github",
+  "excludeProjects": ["everything-claude-code", "skill-manager"]
+}
