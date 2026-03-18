@@ -416,7 +416,7 @@ function render() {
   const toolHeaders = tools.map(t => `<th class="tool-col">${t}</th>`).join('')
 
   const rows = list.map(skill => {
-    const relPath = skill.path.replace(process?.env?.HOME || '', '~')
+    const relPath = skill.path.replace(/^\/home\/[^/]+/, '~')
     const statusCells = tools.map(tool => {
       const st = skill.status[tool]
       return `<td class="tool-cell"><span class="status-badge ${st}"
