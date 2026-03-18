@@ -246,7 +246,27 @@
     .status-badge.directory { background: rgba(245,158,11,0.1); color: var(--yellow); border-color: rgba(245,158,11,0.3); cursor: default; }
     .status-badge.directory:hover { transform: none; }
     .status-badge.wrong { background: rgba(239,68,68,0.1); color: var(--red); border-color: rgba(239,68,68,0.3); }
+    .status-badge.blocked { background: rgba(107,114,128,0.08); color: #4b5563; border-color: #374151; cursor: pointer; }
+    .status-badge.blocked:hover { background: rgba(99,102,241,0.08); color: #6b7280; border-color: rgba(99,102,241,0.3); }
     .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+
+    /* Context menu */
+    #ctx-menu {
+      position: fixed; z-index: 500;
+      background: var(--surface2); border: 1px solid var(--border);
+      border-radius: 8px; padding: 4px; min-width: 160px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+      display: none;
+    }
+    #ctx-menu.show { display: block; }
+    .ctx-item {
+      padding: 7px 12px; border-radius: 5px; cursor: pointer;
+      font-size: 12px; color: var(--text); display: flex; align-items: center; gap: 8px;
+    }
+    .ctx-item:hover { background: var(--surface); }
+    .ctx-item.danger { color: var(--red); }
+    .ctx-item.danger:hover { background: rgba(239,68,68,0.1); }
+    .ctx-sep { height: 1px; background: var(--border); margin: 3px 0; }
 
     /* Toast */
     #toast {
@@ -315,6 +335,7 @@
 </div>
 
 <div id="toast"></div>
+<div id="ctx-menu"></div>
 
 <div class="modal-overlay" id="modal-overlay" onclick="closeModal(event)">
   <div class="modal">
@@ -329,10 +350,12 @@
 <script>
 let skills = []
 let tools = []
+let rules = {}
 let filter = 'all'
 let activeGroup = null   // null = 全部
 let collapsed = {}       // 分组折叠状态
 let toastTimer = null
+let ctxMenu = null       // { skillName, tool, status }
 
 async function load() {
   try {
@@ -340,6 +363,7 @@ async function load() {
     const data = await r.json()
     skills = data.skills
     tools = data.tools
+    rules = data.rules || {}
     updateStats()
     render()
   } catch (e) {
@@ -384,8 +408,8 @@ function render() {
 
   let list = skills.filter(s => s.name.toLowerCase().includes(q) || s.group.toLowerCase().includes(q))
 
-  if (filter === 'incomplete') list = list.filter(s => !tools.every(t => s.status[t] === 'linked'))
-  else if (filter === 'missing') list = list.filter(s => tools.every(t => s.status[t] === 'missing'))
+  if (filter === 'incomplete') list = list.filter(s => tools.some(t => s.status[t] === 'missing' || s.status[t] === 'wrong'))
+  else if (filter === 'missing') list = list.filter(s => tools.every(t => s.status[t] === 'missing' || s.status[t] === 'blocked'))
 
   if (activeGroup) list = list.filter(s => s.group === activeGroup)
 
@@ -432,6 +456,7 @@ function render() {
           const st = skill.status[tool]
           return `<td class="tool-cell"><span class="status-badge ${st}"
             onclick="toggleLink('${esc(skill.name)}','${tool}','${st}')"
+            oncontextmenu="showCtxMenu(event,'${esc(skill.name)}','${tool}','${st}')"
             title="${getTitle(st, skill.name, tool)}">
             <span class="dot"></span>${getLabel(st)}
           </span></td>`
@@ -476,18 +501,24 @@ function toggleGroup(group) {
 }
 
 function getLabel(st) {
-  return { linked: '已链接', missing: '未链接', directory: '实体目录', wrong: '链接错误' }[st] || st
+  return { linked: '已链接', missing: '未链接', directory: '实体目录', wrong: '链接错误', blocked: '已屏蔽' }[st] || st
 }
 function getTitle(st, name, tool) {
-  if (st === 'linked') return `点击移除 ${tool}/${name} 链接`
-  if (st === 'missing') return `点击在 ${tool} 中创建 ${name} 链接`
+  if (st === 'linked') return `点击移除链接 | 右键更多操作`
+  if (st === 'missing') return `点击创建链接 | 右键更多操作`
   if (st === 'directory') return '实体目录，需手动处理'
   if (st === 'wrong') return '软链接指向错误路径，点击修复'
+  if (st === 'blocked') return `已屏蔽：${name} 不允许链接到 ${tool}，点击解除屏蔽`
   return ''
 }
 
 async function toggleLink(name, tool, status) {
   if (status === 'directory') return
+  if (status === 'blocked') {
+    if (!confirm(`解除屏蔽：允许 "${name}" 链接到 ${tool}？`)) return
+    await setRule(name, tool, false)
+    return
+  }
   if (status === 'linked') {
     if (!confirm(`移除 ${tool} 中的 "${name}" 链接？`)) return
     const r = await fetch(`/api/skills/${name}/link`, {
@@ -504,6 +535,52 @@ async function toggleLink(name, tool, status) {
   }
   await load()
 }
+
+async function setRule(name, tool, blocked) {
+  const r = await fetch(`/api/skills/${name}/rule`, {
+    method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify({tool, blocked})
+  })
+  const d = await r.json()
+  toast(d.ok ? (blocked ? `已屏蔽 ${name} → ${tool}` : `已解除屏蔽 ${name} → ${tool}`) : d.error, d.ok ? 'ok' : 'err')
+  await load()
+}
+
+function showCtxMenu(e, name, tool, status) {
+  e.preventDefault()
+  e.stopPropagation()
+  const menu = document.getElementById('ctx-menu')
+  const isBlocked = status === 'blocked'
+  const isLinked = status === 'linked'
+  let html = ''
+  if (isBlocked) {
+    html += `<div class="ctx-item" onclick="closeCtxMenu();setRule('${esc(name)}','${tool}',false)">🔓 解除屏蔽</div>`
+  } else {
+    if (isLinked) {
+      html += `<div class="ctx-item" onclick="closeCtxMenu();toggleLink('${esc(name)}','${tool}','linked')">✕ 移除链接</div>`
+      html += `<div class="ctx-sep"></div>`
+    } else if (status === 'missing') {
+      html += `<div class="ctx-item" onclick="closeCtxMenu();toggleLink('${esc(name)}','${tool}','missing')">＋ 创建链接</div>`
+      html += `<div class="ctx-sep"></div>`
+    }
+    html += `<div class="ctx-item danger" onclick="closeCtxMenu();confirmBlock('${esc(name)}','${tool}')">🔒 屏蔽此工具</div>`
+  }
+  menu.innerHTML = html
+  menu.style.left = Math.min(e.clientX, window.innerWidth - 180) + 'px'
+  menu.style.top = Math.min(e.clientY, window.innerHeight - 120) + 'px'
+  menu.classList.add('show')
+}
+
+function closeCtxMenu() {
+  document.getElementById('ctx-menu').classList.remove('show')
+}
+
+async function confirmBlock(name, tool) {
+  if (!confirm(`屏蔽：禁止 "${name}" 链接到 ${tool}？\n（已有链接将自动移除）`)) return
+  await setRule(name, tool, true)
+}
+
+document.addEventListener('click', closeCtxMenu)
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeCtxMenu() })
 
 async function syncAll() {
   const sp = document.getElementById('sync-spinner')

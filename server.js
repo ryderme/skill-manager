@@ -1,7 +1,7 @@
 const express = require('express')
 const fs = require('fs')
 const path = require('path')
-const { execSync, exec } = require('child_process')
+const { exec } = require('child_process')
 
 const app = express()
 const PORT = process.env.PORT || 3456
@@ -12,20 +12,22 @@ app.use(express.static(path.join(__dirname, 'public')))
 // ── 配置 ──────────────────────────────────────────────────────────────────────
 
 const HOME = process.env.HOME
+const CONFIG_PATH = path.join(__dirname, 'tools.json')
 
 function expandHome(p) {
   return p.startsWith('~/') ? path.join(HOME, p.slice(2)) : p
 }
 
 function loadConfig() {
-  const configPath = path.join(__dirname, 'tools.json')
-  const base = JSON.parse(fs.readFileSync(configPath, 'utf8'))
+  const base = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'))
 
-  const skillsDir = process.env.SKILLS_DIR
-    ? expandHome(process.env.SKILLS_DIR)
-    : expandHome(base.skillsDir || '~/github')
+  const rawSkillsDir = base.skillsDir ?? '~/github'
+  const skillsDirs = process.env.SKILLS_DIR
+    ? process.env.SKILLS_DIR.split(',').map(s => expandHome(s.trim()))
+    : Array.isArray(rawSkillsDir)
+      ? rawSkillsDir.map(expandHome)
+      : [expandHome(rawSkillsDir)]
 
-  // 合并 tools.json 和环境变量（环境变量优先）
   const tools = {}
   for (const [name, dir] of Object.entries(base.tools || {})) {
     const envKey = name.toUpperCase() + '_SKILLS'
@@ -38,13 +40,33 @@ function loadConfig() {
       : (base.excludeProjects || [])
   )
 
-  return { skillsDir, tools, excludeProjects }
+  const rules = base.rules || {}
+
+  return { skillsDirs, tools, excludeProjects, rules }
 }
 
-const config = loadConfig()
-const GITHUB_DIR = config.skillsDir
-const TOOLS = config.tools
-const EXCLUDE_PROJECTS = config.excludeProjects
+let config = loadConfig()
+let SKILLS_DIRS = config.skillsDirs
+let TOOLS = config.tools
+let EXCLUDE_PROJECTS = config.excludeProjects
+let RULES = config.rules
+
+// 判断某个 skill 是否允许链接到某个工具
+function isAllowed(skillName, tool) {
+  const rule = RULES[skillName]
+  if (!rule) return true
+  if (rule.only) return rule.only.includes(tool)
+  if (rule.exclude) return !rule.exclude.includes(tool)
+  return true
+}
+
+// 将 rules 写回 tools.json
+function saveRules(rules) {
+  const raw = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'))
+  raw.rules = rules
+  fs.writeFileSync(CONFIG_PATH, JSON.stringify(raw, null, 2) + '\n')
+  RULES = rules
+}
 
 // ── 扫描逻辑 ──────────────────────────────────────────────────────────────────
 
@@ -60,21 +82,18 @@ function findSkillDirs() {
     const hasSkill = entries.some(e => e.name === 'SKILL.md' && e.isFile())
     if (hasSkill) {
       skills.push(dir)
-      return // 不递归进已经是 skill 的目录
+      return
     }
 
     for (const entry of entries) {
       if (!entry.isDirectory()) continue
       if (entry.name.startsWith('.') && depth > 0) continue
-
-      // 根层级跳过排除项目
       if (depth === 0 && EXCLUDE_PROJECTS.has(entry.name)) continue
-
       walk(path.join(dir, entry.name), depth + 1)
     }
   }
 
-  walk(GITHUB_DIR)
+  for (const dir of SKILLS_DIRS) walk(dir)
   return skills.sort()
 }
 
@@ -83,6 +102,10 @@ function getSkillStatus(skillDir) {
   const status = {}
 
   for (const [tool, toolDir] of Object.entries(TOOLS)) {
+    if (!isAllowed(name, tool)) {
+      status[tool] = 'blocked'
+      continue
+    }
     const target = path.join(toolDir, name)
     try {
       const stat = fs.lstatSync(target)
@@ -91,39 +114,37 @@ function getSkillStatus(skillDir) {
         const resolved = path.resolve(path.dirname(target), linkTarget)
         status[tool] = resolved === skillDir ? 'linked' : 'wrong'
       } else {
-        status[tool] = 'directory' // 实体目录，非软链接
+        status[tool] = 'directory'
       }
     } catch {
       status[tool] = 'missing'
     }
   }
 
-  // 读取 SKILL.md 的第一行作为描述
   let description = ''
   try {
     const content = fs.readFileSync(path.join(skillDir, 'SKILL.md'), 'utf8')
-    const firstLine = content.split('\n').find(l => l.trim() && !l.startsWith('#'))
     const titleLine = content.split('\n').find(l => l.startsWith('# '))
+    const firstLine = content.split('\n').find(l => l.trim() && !l.startsWith('#'))
     description = titleLine ? titleLine.replace(/^#\s*/, '').trim() : (firstLine || '').trim()
     if (description.length > 80) description = description.slice(0, 77) + '...'
   } catch {}
 
-  // 分组：相对于 GITHUB_DIR 的第一级目录名
-  const rel = path.relative(GITHUB_DIR, skillDir)
+  const baseDir = SKILLS_DIRS.find(d => skillDir.startsWith(d + path.sep) || skillDir === d) || SKILLS_DIRS[0]
+  const rel = path.relative(baseDir, skillDir)
   const group = rel.split(path.sep)[0]
-  const standalone = group === path.basename(skillDir) // 项目本身就是 skill
+  const standalone = group === path.basename(skillDir)
 
   return { name, path: skillDir, description, status, group, standalone }
 }
 
 // ── API ───────────────────────────────────────────────────────────────────────
 
-// 获取所有 skill 状态
 app.get('/api/skills', (req, res) => {
   try {
     const dirs = findSkillDirs()
     const skills = dirs.map(getSkillStatus)
-    res.json({ skills, tools: Object.keys(TOOLS) })
+    res.json({ skills, tools: Object.keys(TOOLS), rules: RULES })
   } catch (err) {
     res.status(500).json({ error: err.message })
   }
@@ -135,6 +156,7 @@ app.post('/api/skills/:name/link', (req, res) => {
   const { tool } = req.body
 
   if (!TOOLS[tool]) return res.status(400).json({ error: '未知工具: ' + tool })
+  if (!isAllowed(name, tool)) return res.status(403).json({ error: `${name} 已被规则限制，不允许链接到 ${tool}` })
 
   const dirs = findSkillDirs()
   const skillDir = dirs.find(d => path.basename(d) === name)
@@ -145,14 +167,11 @@ app.post('/api/skills/:name/link', (req, res) => {
 
   try {
     fs.mkdirSync(toolDir, { recursive: true })
-
-    // 如果已存在软链接则先删除
     try {
       const stat = fs.lstatSync(target)
       if (stat.isSymbolicLink()) fs.unlinkSync(target)
       else return res.status(409).json({ error: '目标已存在且非软链接，请手动处理' })
     } catch {}
-
     fs.symlinkSync(skillDir, target)
     res.json({ ok: true, message: `已链接 ${tool}/${name}` })
   } catch (err) {
@@ -168,7 +187,6 @@ app.delete('/api/skills/:name/link', (req, res) => {
   if (!TOOLS[tool]) return res.status(400).json({ error: '未知工具: ' + tool })
 
   const target = path.join(TOOLS[tool], name)
-
   try {
     const stat = fs.lstatSync(target)
     if (!stat.isSymbolicLink()) return res.status(409).json({ error: '非软链接，不能删除' })
@@ -179,13 +197,65 @@ app.delete('/api/skills/:name/link', (req, res) => {
   }
 })
 
-// 全量同步（调用 skill-sync.sh）
-app.post('/api/sync', (req, res) => {
-  const scriptPath = path.join(GITHUB_DIR, 'skill-sync.sh')
-  if (!fs.existsSync(scriptPath)) {
-    return res.status(404).json({ error: '未找到 skill-sync.sh' })
+// 设置规则（block/unblock）
+app.put('/api/skills/:name/rule', (req, res) => {
+  const { name } = req.params
+  const { tool, blocked } = req.body
+
+  if (!TOOLS[tool]) return res.status(400).json({ error: '未知工具: ' + tool })
+
+  const rules = { ...RULES }
+  const allTools = Object.keys(TOOLS)
+
+  if (blocked) {
+    // 添加排除规则
+    const existing = rules[name] || {}
+    const excludeSet = new Set(existing.exclude || [])
+    excludeSet.add(tool)
+    // 如果排除了所有工具，用 exclude 表示；如果只允许部分，用 only
+    const excluded = [...excludeSet]
+    const allowed = allTools.filter(t => !excluded.includes(t))
+    if (allowed.length === 0) {
+      rules[name] = { exclude: excluded }
+    } else if (allowed.length < excluded.length) {
+      rules[name] = { only: allowed }
+    } else {
+      rules[name] = { exclude: excluded }
+    }
+    // 同时移除软链接
+    try {
+      const target = path.join(TOOLS[tool], name)
+      const stat = fs.lstatSync(target)
+      if (stat.isSymbolicLink()) fs.unlinkSync(target)
+    } catch {}
+  } else {
+    // 移除排除规则
+    const existing = rules[name]
+    if (existing) {
+      if (existing.exclude) {
+        const newExclude = existing.exclude.filter(t => t !== tool)
+        if (newExclude.length === 0) delete rules[name]
+        else rules[name] = { exclude: newExclude }
+      } else if (existing.only) {
+        const newOnly = [...existing.only, tool]
+        if (newOnly.length === allTools.length) delete rules[name]
+        else rules[name] = { only: newOnly }
+      }
+    }
   }
 
+  try {
+    saveRules(rules)
+    res.json({ ok: true, rules })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
+// 全量同步
+app.post('/api/sync', (req, res) => {
+  const scriptPath = path.join(__dirname, 'skill-sync.sh')
+  if (!fs.existsSync(scriptPath)) return res.status(404).json({ error: '未找到 skill-sync.sh' })
   exec(`bash "${scriptPath}" sync 2>&1`, { timeout: 30000 }, (err, stdout) => {
     res.json({ ok: !err, output: stdout, error: err ? err.message : null })
   })
@@ -193,13 +263,11 @@ app.post('/api/sync', (req, res) => {
 
 // 清理失效链接
 app.post('/api/clean', (req, res) => {
-  const scriptPath = path.join(GITHUB_DIR, 'skill-sync.sh')
+  const scriptPath = path.join(__dirname, 'skill-sync.sh')
   exec(`bash "${scriptPath}" clean 2>&1`, { timeout: 10000 }, (err, stdout) => {
     res.json({ ok: !err, output: stdout, error: err ? err.message : null })
   })
 })
-
-// ── 启动 ──────────────────────────────────────────────────────────────────────
 
 app.listen(PORT, () => {
   console.log(`Skill Manager running at http://localhost:${PORT}`)

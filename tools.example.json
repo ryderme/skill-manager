@@ -1,0 +1,11 @@
+{
+  "tools": {
+    "claudecode": "~/.claude/skills",
+    "codex": "~/.codex/skills"
+  },
+  "skillsDir": ["~/github"],
+  "excludeProjects": [
+    "skill-manager"
+  ],
+  "rules": {}
+}
