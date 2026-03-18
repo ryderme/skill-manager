@@ -38,11 +38,6 @@
         "codex"
       ]
     },
-    "baoyu-compress-image": {
-      "exclude": [
-        "codex"
-      ]
-    },
     "baoyu-cf-r2-upload": {
       "exclude": [
         "codex"
@@ -78,17 +73,26 @@
       "exclude": [
         "claudecode"
       ]
-    }
-  },
-  "toolRules": {
-    "codex": {
-      "blockAll": true,
-      "allow": [
-        "baijiahao-pipeline",
-        "baijiahao-task-article-writer",
-        "baoyu-compress-image",
-        "baoyu-cf-r2-upload"
+    },
+    "gstack": {
+      "exclude": [
+        "openclaw"
+      ]
+    },
+    "baoyu-skills": {
+      "exclude": [
+        "claudecode"
       ]
     }
-  }
+  },
+  "toolRules": {},
+  "deletedSkills": [
+    "find-skills",
+    "architecture-diagram-skill",
+    "diagram-exporter-skill",
+    "google-trends-seo-skill",
+    "topic-curation",
+    "topic-discovery",
+    "baoyu-cf-r2-upload"
+  ]
 }

@@ -57,15 +57,32 @@ function loadConfig() {
   return { skillsDirs, skillsDirGroups, tools, excludeProjects, rules, groupRules, toolRules, deletedSkills }
 }
 
-let config = loadConfig()
-let SKILLS_DIRS = config.skillsDirs
-let SKILLS_DIR_GROUPS = config.skillsDirGroups
-let TOOLS = config.tools
-let EXCLUDE_PROJECTS = config.excludeProjects
-let RULES = config.rules
-let GROUP_RULES = config.groupRules
-let TOOL_RULES = config.toolRules
-let DELETED_SKILLS = config.deletedSkills
+let SKILLS_DIRS, SKILLS_DIR_GROUPS, TOOLS, EXCLUDE_PROJECTS, RULES, GROUP_RULES, TOOL_RULES, DELETED_SKILLS
+
+function reloadConfig() {
+  const config = loadConfig()
+  SKILLS_DIRS = config.skillsDirs
+  SKILLS_DIR_GROUPS = config.skillsDirGroups
+  TOOLS = config.tools
+  EXCLUDE_PROJECTS = config.excludeProjects
+  RULES = config.rules
+  GROUP_RULES = config.groupRules
+  TOOL_RULES = config.toolRules
+  DELETED_SKILLS = config.deletedSkills
+}
+
+reloadConfig()
+
+// Watch tools.json for external changes (e.g. npx skills add)
+if (!process.env._TEST_CONFIG_PATH) {
+  let _watchDebounce = null
+  fs.watch(CONFIG_PATH, () => {
+    clearTimeout(_watchDebounce)
+    _watchDebounce = setTimeout(() => {
+      try { reloadConfig() } catch (err) { console.error('Config reload failed:', err.message) }
+    }, 300)
+  })
+}
 
 // ── Persistence helpers ────────────────────────────────────────────────────────
 
@@ -208,11 +225,52 @@ function doDeleteSkill(name, hardDelete) {
 app.get('/api/skills', (req, res) => {
   try {
     const dirs = _findSkillDirs()
+    // Detect name conflicts across skillsDirs
+    const seen = {}
+    const nameConflicts = {}
+    for (const d of dirs) {
+      const name = path.basename(d)
+      if (seen[name]) {
+        nameConflicts[name] = nameConflicts[name] || [seen[name]]
+        nameConflicts[name].push(d)
+      } else {
+        seen[name] = d
+      }
+    }
     const skills = dirs.map(getSkillStatus)
-    res.json({ skills, tools: Object.keys(TOOLS), rules: RULES, groupRules: GROUP_RULES, toolRules: TOOL_RULES })
+    res.json({ skills, tools: Object.keys(TOOLS), rules: RULES, groupRules: GROUP_RULES, toolRules: TOOL_RULES, nameConflicts })
   } catch (err) {
     res.status(500).json({ error: err.message })
   }
+})
+
+app.get('/api/deleted-skills', (req, res) => {
+  // Walk all skillsDirs ignoring DELETED_SKILLS filter to find which deleted skills still exist on disk
+  const allDirs = []
+  function walkAll(dir, depth) {
+    if (depth > 5) return
+    let entries
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }) } catch { return }
+    if (entries.some(e => e.name === 'SKILL.md' && e.isFile())) { allDirs.push(dir); return }
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue
+      if (entry.name.startsWith('.') && depth > 0) continue
+      walkAll(path.join(dir, entry.name), depth + 1)
+    }
+  }
+  for (const d of SKILLS_DIRS) walkAll(d, 0)
+  const onDisk = new Set(allDirs.map(d => path.basename(d)))
+  const result = [...DELETED_SKILLS].map(name => ({ name, existsOnDisk: onDisk.has(name) }))
+  res.json({ deletedSkills: result })
+})
+
+app.post('/api/skills/:name/restore', (req, res) => {
+  const { name } = req.params
+  if (!DELETED_SKILLS.has(name)) return res.status(404).json({ error: `"${name}" 不在已删除列表中` })
+  const updated = new Set(DELETED_SKILLS)
+  updated.delete(name)
+  saveDeletedSkills(updated)
+  res.json({ ok: true, message: `已恢复 "${name}"，可重新链接` })
 })
 
 app.post('/api/skills/:name/link', (req, res) => {
@@ -541,6 +599,50 @@ app.post('/api/clean', (req, res) => {
 
   log.push(`\n清理完成，删除 ${cleaned} 个失效链接`)
   res.json({ ok: true, output: log.join('\n') })
+})
+
+app.post('/api/batch/link', (req, res) => {
+  const { items } = req.body
+  if (!Array.isArray(items) || items.length === 0) return res.status(400).json({ error: 'items 必须是非空数组' })
+  const unknown = items.map(i => i.tool).filter(t => !TOOLS[t])
+  if (unknown.length) return res.status(400).json({ error: '未知工具: ' + [...new Set(unknown)].join(', ') })
+
+  const dirs = _findSkillDirs()
+  const results = items.map(({ name, tool }) => {
+    const skillDir = dirs.find(d => path.basename(d) === name)
+    if (!skillDir) return { name, tool, ok: false, error: '未找到 skill' }
+    const group = _getSkillGroup(skillDir)
+    if (!_isAllowed(name, tool, group)) return { name, tool, ok: false, error: '已被规则限制' }
+    const target = path.join(TOOLS[tool], name)
+    try {
+      fs.mkdirSync(TOOLS[tool], { recursive: true })
+      try { if (fs.lstatSync(target).isSymbolicLink()) fs.unlinkSync(target) } catch {}
+      fs.symlinkSync(skillDir, target)
+      return { name, tool, ok: true }
+    } catch (err) {
+      return { name, tool, ok: false, error: err.message }
+    }
+  })
+  res.json({ ok: true, results })
+})
+
+app.post('/api/batch/unlink', (req, res) => {
+  const { items } = req.body
+  if (!Array.isArray(items) || items.length === 0) return res.status(400).json({ error: 'items 必须是非空数组' })
+  const unknown = items.map(i => i.tool).filter(t => !TOOLS[t])
+  if (unknown.length) return res.status(400).json({ error: '未知工具: ' + [...new Set(unknown)].join(', ') })
+
+  const results = items.map(({ name, tool }) => {
+    const target = path.join(TOOLS[tool], name)
+    try {
+      if (!fs.lstatSync(target).isSymbolicLink()) return { name, tool, ok: false, error: '非软链接' }
+      fs.unlinkSync(target)
+      return { name, tool, ok: true }
+    } catch {
+      return { name, tool, ok: false, error: '链接不存在' }
+    }
+  })
+  res.json({ ok: true, results })
 })
 
 module.exports = app

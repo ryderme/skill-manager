@@ -298,6 +298,25 @@
     .modal-body { padding: 16px 20px; overflow-y: auto; flex: 1; }
     .log-output { font-family: monospace; font-size: 12px; line-height: 1.6; color: #a5b4fc; white-space: pre-wrap; word-break: break-all; }
 
+    .conflict-badge { font-size: 10px; padding: 1px 6px; border-radius: 10px; margin-left: 6px; background: rgba(239,68,68,0.12); color: var(--red); border: 1px solid rgba(239,68,68,0.3); font-weight: 600; cursor: help; }
+
+    /* Batch toolbar */
+    .batch-bar {
+      position: fixed; bottom: 0; left: 0; right: 0; z-index: 150;
+      background: var(--surface2); border-top: 1px solid var(--border);
+      padding: 10px 24px; display: flex; gap: 8px; align-items: center;
+      transform: translateY(100%); transition: transform 0.2s;
+    }
+    .batch-bar.show { transform: translateY(0); }
+    .batch-count { font-size: 13px; color: var(--muted); margin-right: 4px; }
+    .batch-label { font-size: 12px; color: var(--muted); margin: 0 4px; }
+
+    /* Deleted modal list */
+    .deleted-list { display: flex; flex-direction: column; gap: 8px; }
+    .deleted-item { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; background: var(--surface2); border-radius: 6px; border: 1px solid var(--border); }
+    .deleted-item-name { font-size: 13px; font-weight: 500; }
+    .deleted-item-meta { font-size: 11px; color: var(--muted); margin-top: 2px; }
+
     .empty { text-align: center; padding: 48px; color: var(--muted); }
     .loading { text-align: center; padding: 48px; color: var(--muted); }
     .spinner {
@@ -327,6 +346,17 @@
   <div style="flex:1"></div>
   <button class="btn primary" onclick="syncAll()"><span class="spinner" id="sync-spinner" style="display:none"></span>⟳ 全量同步</button>
   <button class="btn danger" onclick="cleanLinks()">🧹 清理失效</button>
+  <button class="btn" id="deleted-btn" onclick="showDeletedModal()" style="display:none">🗑 已删除 (<span id="deleted-count">0</span>)</button>
+</div>
+
+<div class="batch-bar" id="batch-bar">
+  <span class="batch-count" id="batch-count">0 已选</span>
+  <span class="batch-label">链接到:</span>
+  <span id="batch-link-btns"></span>
+  <span class="batch-label" style="margin-left:8px">断开:</span>
+  <span id="batch-unlink-btns"></span>
+  <div style="flex:1"></div>
+  <button class="btn" onclick="clearSelection()">取消选择</button>
 </div>
 
 <div class="layout">
@@ -347,27 +377,48 @@
   </div>
 </div>
 
+<div class="modal-overlay" id="deleted-overlay" onclick="if(event.target===this)this.classList.remove('show')">
+  <div class="modal">
+    <div class="modal-header">
+      <h3>🗑 已删除的 Skill</h3>
+      <button class="modal-close" onclick="document.getElementById('deleted-overlay').classList.remove('show')">✕</button>
+    </div>
+    <div class="modal-body" id="deleted-body"></div>
+  </div>
+</div>
+
 <script>
 let skills = []
 let tools = []
 let rules = {}
 let groupRules = {}
 let toolRules = {}
+let nameConflicts = {}
 let filter = 'all'
-let activeGroup = null   // null = 全部
-let collapsed = {}       // 分组折叠状态
+let activeGroup = null
+let collapsed = {}
+let selectedSkills = new Set()
 let toastTimer = null
-let ctxMenu = null       // { skillName, tool, status }
+let ctxMenu = null
 
 async function load() {
   try {
-    const r = await fetch('/api/skills')
-    const data = await r.json()
+    const [skillsRes, deletedRes] = await Promise.all([
+      fetch('/api/skills'),
+      fetch('/api/deleted-skills'),
+    ])
+    const data = await skillsRes.json()
+    const deletedData = await deletedRes.json()
     skills = data.skills
     tools = data.tools
     rules = data.rules || {}
     groupRules = data.groupRules || {}
     toolRules = data.toolRules || {}
+    nameConflicts = data.nameConflicts || {}
+    const deletedCount = deletedData.deletedSkills?.length || 0
+    const deletedBtn = document.getElementById('deleted-btn')
+    deletedBtn.style.display = deletedCount > 0 ? '' : 'none'
+    document.getElementById('deleted-count').textContent = deletedCount
     updateStats()
     render()
   } catch (e) {
@@ -410,7 +461,7 @@ function groupSkills(list) {
 function render() {
   const q = document.getElementById('search').value.toLowerCase()
 
-  let list = skills.filter(s => s.name.toLowerCase().includes(q) || s.group.toLowerCase().includes(q))
+  let list = skills.filter(s => s.name.toLowerCase().includes(q) || s.group.toLowerCase().includes(q) || (s.description && s.description.toLowerCase().includes(q)))
 
   if (filter === 'incomplete') list = list.filter(s => tools.some(t => s.status[t] === 'missing' || s.status[t] === 'wrong'))
   else if (filter === 'missing') list = list.filter(s => tools.every(t => s.status[t] === 'missing' || s.status[t] === 'blocked'))
@@ -433,7 +484,7 @@ function render() {
     const isBlockedAll = toolRules[t]?.blockAll
     return `<th class="tool-col" oncontextmenu="showToolCtxMenu(event,'${t}')" style="cursor:pointer" title="右键管理 ${t} 全局规则">${isBlockedAll ? '🔒 ' : ''}${t}</th>`
   }).join('')
-  const colspan = tools.length + 1
+  const colspan = tools.length + 2  // +1 for checkbox column
 
   let tbody = ''
   for (const [group, groupSkills] of grouped) {
@@ -468,9 +519,13 @@ function render() {
             <span class="dot"></span>${getLabel(st, skill.name, skill.group, tool)}
           </span></td>`
         }).join('')
+        const hasConflict = !!nameConflicts[skill.name]
         return `<tr>
+          <td style="width:28px;text-align:center;padding:0 4px">
+            <input type="checkbox" ${selectedSkills.has(skill.name) ? 'checked' : ''} onchange="toggleSelect('${esc(skill.name)}',this.checked)">
+          </td>
           <td oncontextmenu="showSkillCtxMenu(event,'${esc(skill.name)}')">
-            <div class="skill-name">${esc(skill.name)}</div>
+            <div class="skill-name">${esc(skill.name)}${hasConflict ? `<span class="conflict-badge" title="名称冲突：存在于多个 skillsDir">⚠ 冲突</span>` : ''}</div>
             ${skill.description ? `<div class="skill-desc">${esc(skill.description)}</div>` : ''}
           </td>
           ${statusCells}
@@ -481,9 +536,13 @@ function render() {
 
   document.getElementById('content').innerHTML = `
     <table>
-      <thead><tr><th>Skill</th>${toolHeaders}</tr></thead>
+      <thead><tr>
+        <th style="width:28px"><input type="checkbox" title="全选/全不选" onchange="toggleSelectAll(this.checked,list)"></th>
+        <th>Skill</th>${toolHeaders}
+      </tr></thead>
       <tbody>${tbody}</tbody>
     </table>`
+  updateBatchBar()
 }
 
 function renderSidebar(filteredSkills) {
@@ -661,6 +720,10 @@ function showCtxMenu(e, name, group, tool, status) {
       html += `<div class="ctx-item" onclick="closeCtxMenu();confirmBlockGroup('${esc(group)}','${tool}')">🔒 屏蔽整组 ${esc(group)}</div>`
       html += `<div class="ctx-item danger" onclick="closeCtxMenu();confirmBlockTool('${tool}')">🔒 全局屏蔽 ${tool}</div>`
     }
+  } else if (status === 'wrong') {
+    html += `<div class="ctx-item" onclick="closeCtxMenu();fixLink('${esc(name)}','${tool}')">⟳ 修复软链接</div>`
+    html += `<div class="ctx-sep"></div>`
+    html += `<div class="ctx-item danger" onclick="closeCtxMenu();confirmBlock('${esc(name)}','${esc(group)}','${tool}')">🔒 屏蔽此 skill</div>`
   } else {
     if (isLinked) {
       html += `<div class="ctx-item" onclick="closeCtxMenu();toggleLink('${esc(name)}','${esc(group)}','${tool}','linked')">✕ 移除链接</div>`
@@ -754,6 +817,112 @@ async function confirmBlockTool(tool) {
   const linked = skills.filter(s => s.status[tool] === 'linked').length
   if (!confirm(`全局屏蔽：禁止 ${tool} 链接所有 skill？\n（将自动移除 ${linked} 个已有链接）`)) return
   await setToolRule(tool, true)
+}
+
+// ── Wrong symlink fix ──────────────────────────────────────────────────────────
+
+async function fixLink(name, tool) {
+  const r = await fetch(`/api/skills/${encodeURIComponent(name)}/link`, {
+    method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ tool })
+  })
+  const d = await r.json()
+  toast(d.ok ? `已修复 ${tool}/${name}` : (d.error || '修复失败'), d.ok ? 'ok' : 'err')
+  await load()
+}
+
+// ── Deleted skills modal ───────────────────────────────────────────────────────
+
+async function showDeletedModal() {
+  const r = await fetch('/api/deleted-skills')
+  const d = await r.json()
+  const list = d.deletedSkills || []
+  const body = document.getElementById('deleted-body')
+  if (list.length === 0) {
+    body.innerHTML = '<div class="empty">没有已删除的 skill</div>'
+  } else {
+    body.innerHTML = `<div class="deleted-list">${list.map(({ name, existsOnDisk }) => `
+      <div class="deleted-item">
+        <div>
+          <div class="deleted-item-name">${esc(name)}</div>
+          <div class="deleted-item-meta">${existsOnDisk ? '✓ 本地文件存在，可恢复' : '✗ 本地文件已删除'}</div>
+        </div>
+        ${existsOnDisk
+          ? `<button class="btn" onclick="restoreSkill('${esc(name)}')">↩ 恢复</button>`
+          : `<button class="btn danger" onclick="purgeDeletedSkill('${esc(name)}')">彻底清除</button>`}
+      </div>`).join('')}</div>`
+  }
+  document.getElementById('deleted-overlay').classList.add('show')
+}
+
+async function restoreSkill(name) {
+  const r = await fetch(`/api/skills/${encodeURIComponent(name)}/restore`, { method: 'POST' })
+  const d = await r.json()
+  toast(d.ok ? `已恢复 "${name}"` : (d.error || '恢复失败'), d.ok ? 'ok' : 'err')
+  await load()
+  showDeletedModal()
+}
+
+async function purgeDeletedSkill(name) {
+  if (!confirm(`彻底清除 "${name}"？\n此条目将从已删除列表中移除（本地文件已不存在）。`)) return
+  const r = await fetch(`/api/skills/${encodeURIComponent(name)}/restore`, { method: 'POST' })
+  await r.json()
+  await load()
+  showDeletedModal()
+}
+
+// ── Batch operations ───────────────────────────────────────────────────────────
+
+function toggleSelect(name, checked) {
+  if (checked) selectedSkills.add(name)
+  else selectedSkills.delete(name)
+  updateBatchBar()
+}
+
+function toggleSelectAll(checked, list) {
+  if (checked) list.forEach(s => selectedSkills.add(s.name))
+  else selectedSkills.clear()
+  render()
+}
+
+function clearSelection() {
+  selectedSkills.clear()
+  render()
+}
+
+function updateBatchBar() {
+  const bar = document.getElementById('batch-bar')
+  const count = selectedSkills.size
+  document.getElementById('batch-count').textContent = `${count} 已选`
+  if (count === 0) { bar.classList.remove('show'); return }
+  bar.classList.add('show')
+  document.getElementById('batch-link-btns').innerHTML = tools.map(t =>
+    `<button class="btn" onclick="batchLink('${t}')">+ ${t}</button>`).join('')
+  document.getElementById('batch-unlink-btns').innerHTML = tools.map(t =>
+    `<button class="btn danger" onclick="batchUnlink('${t}')">- ${t}</button>`).join('')
+}
+
+async function batchLink(tool) {
+  const items = [...selectedSkills].map(name => ({ name, tool }))
+  const r = await fetch('/api/batch/link', {
+    method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ items })
+  })
+  const d = await r.json()
+  const ok = d.results?.filter(r => r.ok).length ?? 0
+  toast(`已链接 ${ok}/${items.length} 个 skill 到 ${tool}`)
+  selectedSkills.clear()
+  await load()
+}
+
+async function batchUnlink(tool) {
+  const items = [...selectedSkills].map(name => ({ name, tool }))
+  const r = await fetch('/api/batch/unlink', {
+    method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ items })
+  })
+  const d = await r.json()
+  const ok = d.results?.filter(r => r.ok).length ?? 0
+  toast(`已断开 ${ok}/${items.length} 个 skill 与 ${tool} 的链接`)
+  selectedSkills.clear()
+  await load()
 }
 
 async function confirmDeleteSkill(name) {
