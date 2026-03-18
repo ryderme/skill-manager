@@ -43,7 +43,26 @@ npm start
 | Claude Code | `~/.claude/skills/` |
 | Codex | `~/.codex/skills/` |
 
-## 排除项目
+## 自定义配置
 
-默认排除 `everything-claude-code`（由 ECC 自行管理）。
-修改 `server.js` 和 `skill-sync.sh` 中的 `EXCLUDE_PROJECTS` 可自定义。
+通过环境变量覆盖默认路径，无需修改代码：
+
+```bash
+# skill 源码目录（默认 ~/github）
+export SKILLS_DIR=~/projects
+
+# 各工具的 skill 目录（有默认值，一般不需要改）
+export OPENCLAW_SKILLS=~/.openclaw/skills
+export CLAUDECODE_SKILLS=~/.claude/skills
+export CODEX_SKILLS=~/.codex/skills
+
+# 排除不扫描的项目（逗号分隔）
+export EXCLUDE_PROJECTS=everything-claude-code,skill-manager
+```
+
+也可以写入 `.env` 文件（不会被提交）：
+
+```bash
+echo "SKILLS_DIR=~/projects" > .env
+# 然后用 source .env && npm start 启动
+```

@@ -12,16 +12,20 @@ app.use(express.static(path.join(__dirname, 'public')))
 // ── 配置 ──────────────────────────────────────────────────────────────────────
 
 const HOME = process.env.HOME
-const GITHUB_DIR = path.join(HOME, 'github')
+const GITHUB_DIR = process.env.SKILLS_DIR || path.join(HOME, 'github')
 
 const TOOLS = {
-  openclaw:   path.join(HOME, '.openclaw/skills'),
-  claudecode: path.join(HOME, '.claude/skills'),
-  codex:      path.join(HOME, '.codex/skills'),
+  openclaw:   process.env.OPENCLAW_SKILLS  || path.join(HOME, '.openclaw/skills'),
+  claudecode: process.env.CLAUDECODE_SKILLS || path.join(HOME, '.claude/skills'),
+  codex:      process.env.CODEX_SKILLS     || path.join(HOME, '.codex/skills'),
 }
 
-// 排除不扫描的项目
-const EXCLUDE_PROJECTS = new Set(['everything-claude-code', 'skill-manager'])
+// 排除不扫描的项目（逗号分隔，或使用默认值）
+const EXCLUDE_PROJECTS = new Set(
+  process.env.EXCLUDE_PROJECTS
+    ? process.env.EXCLUDE_PROJECTS.split(',').map(s => s.trim())
+    : ['everything-claude-code', 'skill-manager']
+)
 
 // ── 扫描逻辑 ──────────────────────────────────────────────────────────────────
 

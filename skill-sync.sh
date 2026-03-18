@@ -11,19 +11,17 @@ set -euo pipefail
 
 # ── 配置 ──────────────────────────────────────────────────────────────────────
 
-GITHUB_DIR="$HOME/github"
+GITHUB_DIR="${SKILLS_DIR:-$HOME/github}"
 
-# 要同步的工具目录
+# 要同步的工具目录（可通过环境变量覆盖）
 declare -A TOOL_DIRS=(
-  [openclaw]="$HOME/.openclaw/skills"
-  [claudecode]="$HOME/.claude/skills"
-  [codex]="$HOME/.codex/skills"
+  [openclaw]="${OPENCLAW_SKILLS:-$HOME/.openclaw/skills}"
+  [claudecode]="${CLAUDECODE_SKILLS:-$HOME/.claude/skills}"
+  [codex]="${CODEX_SKILLS:-$HOME/.codex/skills}"
 )
 
-# 排除的项目（不扫描其中的 SKILL.md）
-EXCLUDE_PROJECTS=(
-  "everything-claude-code"   # ECC 自己管理
-)
+# 排除的项目（可通过环境变量覆盖，逗号分隔）
+IFS=',' read -ra EXCLUDE_PROJECTS <<< "${EXCLUDE_PROJECTS:-everything-claude-code,skill-manager}"
 
 # ── 颜色 ──────────────────────────────────────────────────────────────────────
 
