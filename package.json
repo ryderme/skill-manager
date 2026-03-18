@@ -1,0 +1,13 @@
+{
+  "name": "skill-manager",
+  "version": "1.0.0",
+  "description": "Manage AI coding tool skills across openclaw, Claude Code, and Codex",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  }
+}

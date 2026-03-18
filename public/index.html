@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Skill Manager</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0f1117;
+      --surface: #1a1d27;
+      --surface2: #22263a;
+      --border: #2d3149;
+      --text: #e2e4f0;
+      --muted: #6b7280;
+      --accent: #6366f1;
+      --accent-dim: #3730a3;
+      --green: #10b981;
+      --yellow: #f59e0b;
+      --red: #ef4444;
+      --blue: #3b82f6;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      font-size: 14px;
+    }
+
+    /* Header */
+    .header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 0 24px;
+      height: 56px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+    .header h1 {
+      font-size: 16px;
+      font-weight: 600;
+      color: var(--text);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .header h1 span { color: var(--accent); }
+    .header-spacer { flex: 1; }
+    .header-stats {
+      font-size: 12px;
+      color: var(--muted);
+      display: flex;
+      gap: 16px;
+    }
+    .header-stats strong { color: var(--text); }
+
+    /* Toolbar */
+    .toolbar {
+      padding: 16px 24px;
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .btn {
+      padding: 7px 14px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--text);
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 500;
+      transition: all 0.15s;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .btn:hover { background: var(--surface2); border-color: var(--accent); }
+    .btn.primary { background: var(--accent); border-color: var(--accent); color: white; }
+    .btn.primary:hover { background: #4f46e5; }
+    .btn.danger { border-color: var(--red); color: var(--red); }
+    .btn.danger:hover { background: rgba(239,68,68,0.1); }
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    .search {
+      padding: 7px 12px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--text);
+      font-size: 13px;
+      width: 220px;
+      outline: none;
+    }
+    .search:focus { border-color: var(--accent); }
+    .search::placeholder { color: var(--muted); }
+
+    /* Table */
+    .table-wrap {
+      padding: 0 24px 24px;
+      overflow-x: auto;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      min-width: 700px;
+    }
+    thead th {
+      padding: 10px 12px;
+      text-align: left;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--muted);
+      border-bottom: 1px solid var(--border);
+      white-space: nowrap;
+    }
+    thead th.tool-col {
+      text-align: center;
+      min-width: 120px;
+    }
+    tbody tr {
+      border-bottom: 1px solid var(--border);
+      transition: background 0.1s;
+    }
+    tbody tr:hover { background: var(--surface); }
+    tbody td { padding: 10px 12px; vertical-align: middle; }
+
+    .skill-name {
+      font-weight: 500;
+      color: var(--text);
+      font-size: 13px;
+    }
+    .skill-path {
+      font-size: 11px;
+      color: var(--muted);
+      margin-top: 2px;
+      font-family: monospace;
+    }
+    .skill-desc {
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 2px;
+      max-width: 260px;
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
+
+    .tool-cell {
+      text-align: center;
+    }
+
+    /* Status badge */
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 3px 9px;
+      border-radius: 20px;
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s;
+      border: 1px solid transparent;
+      white-space: nowrap;
+    }
+    .status-badge:hover { transform: scale(1.05); }
+    .status-badge.linked {
+      background: rgba(16,185,129,0.12);
+      color: var(--green);
+      border-color: rgba(16,185,129,0.3);
+    }
+    .status-badge.linked:hover {
+      background: rgba(239,68,68,0.12);
+      color: var(--red);
+      border-color: rgba(239,68,68,0.3);
+    }
+    .status-badge.missing {
+      background: rgba(107,114,128,0.1);
+      color: var(--muted);
+      border-color: var(--border);
+    }
+    .status-badge.missing:hover {
+      background: rgba(99,102,241,0.12);
+      color: var(--accent);
+      border-color: rgba(99,102,241,0.3);
+    }
+    .status-badge.directory {
+      background: rgba(245,158,11,0.1);
+      color: var(--yellow);
+      border-color: rgba(245,158,11,0.3);
+      cursor: default;
+    }
+    .status-badge.directory:hover { transform: none; }
+    .status-badge.wrong {
+      background: rgba(239,68,68,0.1);
+      color: var(--red);
+      border-color: rgba(239,68,68,0.3);
+    }
+    .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+
+    /* Toast */
+    #toast {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 10px 16px;
+      border-radius: 8px;
+      font-size: 13px;
+      max-width: 320px;
+      z-index: 999;
+      opacity: 0;
+      transform: translateY(8px);
+      transition: all 0.2s;
+      pointer-events: none;
+    }
+    #toast.show { opacity: 1; transform: translateY(0); }
+    #toast.ok { border-color: var(--green); }
+    #toast.err { border-color: var(--red); }
+
+    /* Log modal */
+    .modal-overlay {
+      position: fixed; inset: 0;
+      background: rgba(0,0,0,0.6);
+      z-index: 200;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.2s;
+    }
+    .modal-overlay.show { opacity: 1; pointer-events: auto; }
+    .modal {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      width: 640px;
+      max-width: 90vw;
+      max-height: 80vh;
+      display: flex;
+      flex-direction: column;
+    }
+    .modal-header {
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .modal-header h3 { font-size: 14px; font-weight: 600; }
+    .modal-close { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 18px; line-height: 1; }
+    .modal-close:hover { color: var(--text); }
+    .modal-body {
+      padding: 16px 20px;
+      overflow-y: auto;
+      flex: 1;
+    }
+    .log-output {
+      font-family: monospace;
+      font-size: 12px;
+      line-height: 1.6;
+      color: #a5b4fc;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+
+    /* Filter tabs */
+    .filter-tabs {
+      display: flex;
+      gap: 4px;
+      margin-left: auto;
+    }
+    .filter-tab {
+      padding: 5px 12px;
+      border-radius: 5px;
+      border: 1px solid var(--border);
+      background: none;
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 12px;
+      transition: all 0.15s;
+    }
+    .filter-tab:hover, .filter-tab.active {
+      background: var(--surface2);
+      color: var(--text);
+      border-color: var(--accent);
+    }
+
+    .empty {
+      text-align: center;
+      padding: 48px;
+      color: var(--muted);
+    }
+
+    .loading {
+      text-align: center;
+      padding: 48px;
+      color: var(--muted);
+    }
+    .spinner {
+      display: inline-block;
+      width: 18px; height: 18px;
+      border: 2px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      vertical-align: middle;
+      margin-right: 8px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+
+<div class="header">
+  <h1>⚡ <span>Skill</span> Manager</h1>
+  <div class="header-spacer"></div>
+  <div class="header-stats" id="stats"></div>
+</div>
+
+<div class="toolbar">
+  <input class="search" type="text" id="search" placeholder="搜索 skill 名称..." oninput="render()">
+  <div class="filter-tabs">
+    <button class="filter-tab active" onclick="setFilter('all', this)">全部</button>
+    <button class="filter-tab" onclick="setFilter('incomplete', this)">未完整链接</button>
+    <button class="filter-tab" onclick="setFilter('missing', this)">全部缺失</button>
+  </div>
+  <div style="flex:1"></div>
+  <button class="btn primary" onclick="syncAll()"><span class="spinner" id="sync-spinner" style="display:none"></span>⟳ 全量同步</button>
+  <button class="btn danger" onclick="cleanLinks()">🧹 清理失效链接</button>
+</div>
+
+<div class="table-wrap">
+  <div id="content" class="loading"><span class="spinner"></span>加载中...</div>
+</div>
+
+<div id="toast"></div>
+
+<div class="modal-overlay" id="modal-overlay" onclick="closeModal(event)">
+  <div class="modal">
+    <div class="modal-header">
+      <h3 id="modal-title">操作日志</h3>
+      <button class="modal-close" onclick="document.getElementById('modal-overlay').classList.remove('show')">✕</button>
+    </div>
+    <div class="modal-body">
+      <pre class="log-output" id="modal-log"></pre>
+    </div>
+  </div>
+</div>
+
+<script>
+let skills = []
+let tools = []
+let filter = 'all'
+let toastTimer = null
+
+async function load() {
+  try {
+    const r = await fetch('/api/skills')
+    const data = await r.json()
+    skills = data.skills
+    tools = data.tools
+    updateStats()
+    render()
+  } catch (e) {
+    document.getElementById('content').innerHTML = `<div class="empty">加载失败: ${e.message}</div>`
+  }
+}
+
+function updateStats() {
+  const total = skills.length
+  const fullyLinked = skills.filter(s =>
+    tools.every(t => s.status[t] === 'linked')
+  ).length
+  document.getElementById('stats').innerHTML =
+    `<span>共 <strong>${total}</strong> 个 skill</span><span>完整链接 <strong>${fullyLinked}</strong></span>`
+}
+
+function setFilter(f, el) {
+  filter = f
+  document.querySelectorAll('.filter-tab').forEach(t => t.classList.remove('active'))
+  el.classList.add('active')
+  render()
+}
+
+function render() {
+  const q = document.getElementById('search').value.toLowerCase()
+
+  let list = skills.filter(s => s.name.toLowerCase().includes(q))
+
+  if (filter === 'incomplete') {
+    list = list.filter(s => !tools.every(t => s.status[t] === 'linked'))
+  } else if (filter === 'missing') {
+    list = list.filter(s => tools.every(t => s.status[t] === 'missing'))
+  }
+
+  if (list.length === 0) {
+    document.getElementById('content').innerHTML = `<div class="empty">没有匹配的 skill</div>`
+    return
+  }
+
+  const toolHeaders = tools.map(t => `<th class="tool-col">${t}</th>`).join('')
+
+  const rows = list.map(skill => {
+    const relPath = skill.path.replace(process?.env?.HOME || '', '~')
+    const statusCells = tools.map(tool => {
+      const st = skill.status[tool]
+      return `<td class="tool-cell"><span class="status-badge ${st}"
+        onclick="toggleLink('${skill.name}', '${tool}', '${st}')"
+        title="${getTitle(st, skill.name, tool)}">
+        <span class="dot"></span>${getLabel(st)}
+      </span></td>`
+    }).join('')
+
+    return `<tr>
+      <td>
+        <div class="skill-name">${skill.name}</div>
+        ${skill.description ? `<div class="skill-desc">${esc(skill.description)}</div>` : ''}
+        <div class="skill-path">${esc(skill.path)}</div>
+      </td>
+      ${statusCells}
+    </tr>`
+  }).join('')
+
+  document.getElementById('content').innerHTML = `
+    <table>
+      <thead>
+        <tr>
+          <th>Skill</th>
+          ${toolHeaders}
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>`
+}
+
+function getLabel(st) {
+  return { linked: '已链接', missing: '未链接', directory: '实体目录', wrong: '链接错误' }[st] || st
+}
+function getTitle(st, name, tool) {
+  if (st === 'linked') return `点击移除 ${tool} 中的 ${name} 链接`
+  if (st === 'missing') return `点击在 ${tool} 中创建 ${name} 链接`
+  if (st === 'directory') return '这是实体目录，需手动处理'
+  if (st === 'wrong') return '软链接指向错误路径，点击修复'
+  return ''
+}
+
+async function toggleLink(name, tool, status) {
+  if (status === 'directory') return
+  if (status === 'linked') {
+    if (!confirm(`移除 ${tool} 中的 "${name}" 链接？`)) return
+    const r = await fetch(`/api/skills/${name}/link`, {
+      method: 'DELETE', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tool })
+    })
+    const d = await r.json()
+    toast(d.ok ? d.message : d.error, d.ok ? 'ok' : 'err')
+  } else {
+    const r = await fetch(`/api/skills/${name}/link`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tool })
+    })
+    const d = await r.json()
+    toast(d.ok ? d.message : d.error, d.ok ? 'ok' : 'err')
+  }
+  await load()
+}
+
+async function syncAll() {
+  const sp = document.getElementById('sync-spinner')
+  sp.style.display = 'inline-block'
+  try {
+    const r = await fetch('/api/sync', { method: 'POST' })
+    const d = await r.json()
+    showLog('全量同步结果', d.output || d.error)
+    await load()
+  } finally {
+    sp.style.display = 'none'
+  }
+}
+
+async function cleanLinks() {
+  const r = await fetch('/api/clean', { method: 'POST' })
+  const d = await r.json()
+  showLog('清理结果', d.output || d.error)
+  await load()
+}
+
+function showLog(title, content) {
+  document.getElementById('modal-title').textContent = title
+  // Strip ANSI color codes
+  const clean = (content || '').replace(/\x1b\[[0-9;]*m/g, '')
+  document.getElementById('modal-log').textContent = clean
+  document.getElementById('modal-overlay').classList.add('show')
+}
+
+function closeModal(e) {
+  if (e.target === document.getElementById('modal-overlay')) {
+    document.getElementById('modal-overlay').classList.remove('show')
+  }
+}
+
+function toast(msg, type = 'ok') {
+  const el = document.getElementById('toast')
+  el.textContent = msg
+  el.className = `show ${type}`
+  clearTimeout(toastTimer)
+  toastTimer = setTimeout(() => el.classList.remove('show'), 3000)
+}
+
+function esc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+}
+
+load()
+</script>
+</body>
+</html>
