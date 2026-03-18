@@ -157,60 +157,17 @@
     /* Main table area */
     .main { flex: 1; overflow-x: auto; min-width: 0; }
 
-    /* Group section */
-    .group-section { margin-bottom: 24px; }
-    .group-header {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      padding: 10px 12px;
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 8px 8px 0 0;
-      cursor: pointer;
-      user-select: none;
-    }
-    .group-header:hover { background: var(--surface2); }
-    .group-header-name {
-      font-size: 13px;
-      font-weight: 600;
-      color: var(--text);
-    }
-    .group-header-meta {
-      font-size: 11px;
-      color: var(--muted);
-    }
-    .group-header-badge {
-      font-size: 10px;
-      padding: 2px 7px;
-      border-radius: 10px;
-      font-weight: 600;
-    }
-    .badge-standalone {
-      background: rgba(99,102,241,0.15);
-      color: var(--accent);
-      border: 1px solid rgba(99,102,241,0.3);
-    }
-    .badge-collection {
-      background: rgba(245,158,11,0.12);
-      color: var(--yellow);
-      border: 1px solid rgba(245,158,11,0.3);
-    }
-    .group-toggle { color: var(--muted); font-size: 12px; margin-left: auto; transition: transform 0.2s; }
-    .group-toggle.collapsed { transform: rotate(-90deg); }
-
-    /* Table */
+    /* Table — single table for all groups so columns always align */
     table {
       width: 100%;
       border-collapse: collapse;
       min-width: 500px;
       border: 1px solid var(--border);
-      border-top: none;
-      border-radius: 0 0 8px 8px;
+      border-radius: 8px;
       overflow: hidden;
     }
     thead th {
-      padding: 8px 12px;
+      padding: 9px 12px;
       text-align: left;
       font-size: 11px;
       font-weight: 600;
@@ -221,11 +178,38 @@
       border-bottom: 1px solid var(--border);
       white-space: nowrap;
     }
-    thead th.tool-col { text-align: center; min-width: 110px; }
+    thead th.tool-col { text-align: center; width: 120px; }
     tbody tr { border-bottom: 1px solid var(--border); transition: background 0.1s; }
     tbody tr:last-child { border-bottom: none; }
-    tbody tr:hover { background: var(--surface); }
+    tbody tr:hover:not(.group-row) { background: var(--surface); }
     tbody td { padding: 10px 12px; vertical-align: middle; }
+
+    /* Group header row inside the single table */
+    .group-row td {
+      padding: 8px 12px;
+      background: var(--surface);
+      border-top: 2px solid var(--border);
+      cursor: pointer;
+      user-select: none;
+    }
+    .group-row:first-child td { border-top: none; }
+    .group-row:hover td { background: var(--surface2); }
+    .group-row-inner {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .group-row-name { font-size: 13px; font-weight: 600; color: var(--text); }
+    .group-header-badge {
+      font-size: 10px;
+      padding: 2px 7px;
+      border-radius: 10px;
+      font-weight: 600;
+    }
+    .badge-standalone { background: rgba(99,102,241,0.15); color: var(--accent); border: 1px solid rgba(99,102,241,0.3); }
+    .badge-collection { background: rgba(245,158,11,0.12); color: var(--yellow); border: 1px solid rgba(245,158,11,0.3); }
+    .group-toggle { color: var(--muted); font-size: 11px; margin-left: auto; transition: transform 0.2s; display: inline-block; }
+    .group-toggle.collapsed { transform: rotate(-90deg); }
 
     .skill-name { font-weight: 500; color: var(--text); font-size: 13px; }
     .skill-desc {
@@ -418,8 +402,9 @@ function render() {
 
   const grouped = groupSkills(list)
   const toolHeaders = tools.map(t => `<th class="tool-col">${t}</th>`).join('')
+  const colspan = tools.length + 1
 
-  let html = ''
+  let tbody = ''
   for (const [group, groupSkills] of grouped) {
     const isCollapsed = collapsed[group]
     const standalone = groupSkills[0]?.standalone
@@ -428,41 +413,45 @@ function render() {
     const allLinked = groupSkills.every(s => tools.every(t => s.status[t] === 'linked'))
     const anyMissing = groupSkills.some(s => tools.some(t => s.status[t] === 'missing'))
 
-    const rows = groupSkills.map(skill => {
-      const statusCells = tools.map(tool => {
-        const st = skill.status[tool]
-        return `<td class="tool-cell"><span class="status-badge ${st}"
-          onclick="toggleLink('${esc(skill.name)}','${tool}','${st}')"
-          title="${getTitle(st, skill.name, tool)}">
-          <span class="dot"></span>${getLabel(st)}
-        </span></td>`
-      }).join('')
-      return `<tr>
-        <td>
-          <div class="skill-name">${esc(skill.name)}</div>
-          ${skill.description ? `<div class="skill-desc">${esc(skill.description)}</div>` : ''}
-        </td>
-        ${statusCells}
-      </tr>`
-    }).join('')
+    // 分组标题行
+    tbody += `<tr class="group-row" onclick="toggleGroup('${esc(group)}')">
+      <td colspan="${colspan}">
+        <div class="group-row-inner">
+          <span class="group-row-name">${esc(group)}</span>
+          <span class="group-header-badge ${badgeClass}">${badgeText}</span>
+          ${allLinked ? '<span style="font-size:11px;color:var(--green)">✓ 全部已链接</span>' : ''}
+          ${anyMissing && !allLinked ? '<span style="font-size:11px;color:var(--muted)">部分未链接</span>' : ''}
+          <span class="group-toggle ${isCollapsed ? 'collapsed' : ''}">▼</span>
+        </div>
+      </td>
+    </tr>`
 
-    html += `<div class="group-section" id="group-${esc(group)}">
-      <div class="group-header" onclick="toggleGroup('${esc(group)}')">
-        <div class="group-header-name">${esc(group)}</div>
-        <span class="group-header-badge ${badgeClass}">${badgeText}</span>
-        ${allLinked ? '<span style="font-size:11px;color:var(--green)">✓ 全部已链接</span>' : ''}
-        ${anyMissing && !allLinked ? '<span style="font-size:11px;color:var(--muted)">部分未链接</span>' : ''}
-        <span class="group-toggle ${isCollapsed ? 'collapsed' : ''}">▼</span>
-      </div>
-      ${isCollapsed ? '' : `
-      <table>
-        <thead><tr><th>Skill</th>${toolHeaders}</tr></thead>
-        <tbody>${rows}</tbody>
-      </table>`}
-    </div>`
+    if (!isCollapsed) {
+      tbody += groupSkills.map(skill => {
+        const statusCells = tools.map(tool => {
+          const st = skill.status[tool]
+          return `<td class="tool-cell"><span class="status-badge ${st}"
+            onclick="toggleLink('${esc(skill.name)}','${tool}','${st}')"
+            title="${getTitle(st, skill.name, tool)}">
+            <span class="dot"></span>${getLabel(st)}
+          </span></td>`
+        }).join('')
+        return `<tr>
+          <td>
+            <div class="skill-name">${esc(skill.name)}</div>
+            ${skill.description ? `<div class="skill-desc">${esc(skill.description)}</div>` : ''}
+          </td>
+          ${statusCells}
+        </tr>`
+      }).join('')
+    }
   }
 
-  document.getElementById('content').innerHTML = html
+  document.getElementById('content').innerHTML = `
+    <table>
+      <thead><tr><th>Skill</th>${toolHeaders}</tr></thead>
+      <tbody>${tbody}</tbody>
+    </table>`
 }
 
 function renderSidebar(filteredSkills) {
