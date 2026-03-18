@@ -1,9 +1,94 @@
 {
   "tools": {
-    "openclaw":   "~/.openclaw/skills",
+    "openclaw": "~/.openclaw/skills",
     "claudecode": "~/.claude/skills",
-    "codex":      "~/.codex/skills"
+    "codex": "~/.codex/skills"
   },
-  "skillsDir": "~/github",
-  "excludeProjects": ["everything-claude-code", "skill-manager"]
+  "skillsDir": [
+    "~/github",
+    {
+      "path": "~/.agents/skills",
+      "group": ".agents"
+    }
+  ],
+  "excludeProjects": [
+    "everything-claude-code",
+    "skill-manager"
+  ],
+  "rules": {
+    "google-trends-seo-skill": {
+      "exclude": [
+        "openclaw",
+        "claudecode",
+        "codex"
+      ]
+    },
+    "baijiahao-hot-tasks": {
+      "exclude": [
+        "codex"
+      ]
+    },
+    "baijiahao-pipeline": {
+      "exclude": [
+        "codex"
+      ]
+    },
+    "baijiahao-task-article-writer": {
+      "exclude": [
+        "codex"
+      ]
+    },
+    "baoyu-compress-image": {
+      "exclude": [
+        "codex"
+      ]
+    },
+    "baoyu-cf-r2-upload": {
+      "exclude": [
+        "codex"
+      ]
+    },
+    "agent-browser": {
+      "exclude": [
+        "openclaw",
+        "claudecode",
+        "codex"
+      ]
+    },
+    "architecture-diagram-skill": {
+      "exclude": [
+        "openclaw",
+        "claudecode",
+        "codex"
+      ]
+    }
+  },
+  "groupRules": {
+    "baijiahao": {
+      "only": [
+        "openclaw"
+      ]
+    },
+    "opennews-mcp": {
+      "exclude": [
+        "claudecode"
+      ]
+    },
+    "opentwitter-mcp": {
+      "exclude": [
+        "claudecode"
+      ]
+    }
+  },
+  "toolRules": {
+    "codex": {
+      "blockAll": true,
+      "allow": [
+        "baijiahao-pipeline",
+        "baijiahao-task-article-writer",
+        "baoyu-compress-image",
+        "baoyu-cf-r2-upload"
+      ]
+    }
+  }
 }

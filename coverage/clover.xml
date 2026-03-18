@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<coverage generated="1773834952867" clover="3.2.0">
+  <project timestamp="1773834952867" name="All files">
+    <metrics statements="40" coveredstatements="40" conditionals="61" coveredconditionals="55" methods="6" coveredmethods="6" elements="107" coveredelements="101" complexity="0" loc="40" ncloc="40" packages="1" files="1" classes="1"/>
+    <file name="skillLogic.js" path="/home/ubuntu/github/skill-manager/lib/skillLogic.js">
+      <metrics statements="40" coveredstatements="40" conditionals="61" coveredconditionals="55" methods="6" coveredmethods="6"/>
+      <line num="3" count="19" type="stmt"/>
+      <line num="20" count="25" type="cond" truecount="0" falsecount="3"/>
+      <line num="23" count="25" type="stmt"/>
+      <line num="24" count="25" type="cond" truecount="4" falsecount="0"/>
+      <line num="25" count="8" type="cond" truecount="4" falsecount="0"/>
+      <line num="26" count="5" type="cond" truecount="4" falsecount="0"/>
+      <line num="27" count="4" type="stmt"/>
+      <line num="31" count="17" type="cond" truecount="2" falsecount="0"/>
+      <line num="32" count="15" type="stmt"/>
+      <line num="33" count="15" type="cond" truecount="2" falsecount="0"/>
+      <line num="34" count="5" type="cond" truecount="4" falsecount="0"/>
+      <line num="35" count="3" type="cond" truecount="4" falsecount="0"/>
+      <line num="40" count="14" type="stmt"/>
+      <line num="41" count="14" type="cond" truecount="2" falsecount="0"/>
+      <line num="42" count="6" type="cond" truecount="2" falsecount="0"/>
+      <line num="43" count="3" type="cond" truecount="2" falsecount="0"/>
+      <line num="44" count="1" type="stmt"/>
+      <line num="55" count="21" type="cond" truecount="0" falsecount="2"/>
+      <line num="58" count="22" type="cond" truecount="4" falsecount="0"/>
+      <line num="61" count="21" type="cond" truecount="4" falsecount="0"/>
+      <line num="63" count="19" type="stmt"/>
+      <line num="64" count="19" type="stmt"/>
+      <line num="80" count="20" type="stmt"/>
+      <line num="81" count="20" type="stmt"/>
+      <line num="84" count="61" type="cond" truecount="1" falsecount="1"/>
+      <line num="86" count="61" type="stmt"/>
+      <line num="87" count="61" type="stmt"/>
+      <line num="89" count="2" type="stmt"/>
+      <line num="92" count="68" type="cond" truecount="2" falsecount="0"/>
+      <line num="93" count="59" type="cond" truecount="2" falsecount="0"/>
+      <line num="94" count="25" type="cond" truecount="2" falsecount="0"/>
+      <line num="95" count="25" type="stmt"/>
+      <line num="98" count="34" type="stmt"/>
+      <line num="99" count="43" type="cond" truecount="2" falsecount="0"/>
+      <line num="100" count="42" type="cond" truecount="4" falsecount="0"/>
+      <line num="101" count="41" type="cond" truecount="4" falsecount="0"/>
+      <line num="102" count="40" type="stmt"/>
+      <line num="106" count="21" type="stmt"/>
+      <line num="107" count="20" type="stmt"/>
+      <line num="110" count="19" type="stmt"/>
+    </file>
+  </project>
+</coverage>
