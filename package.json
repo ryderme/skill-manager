@@ -7,7 +7,8 @@
     "start": "node server.js",
     "dev": "node --watch server.js",
     "test": "jest --runInBand",
-    "test:coverage": "jest --runInBand --coverage"
+    "test:coverage": "jest --runInBand --coverage",
+    "prepare": "husky"
   },
   "jest": {
     "testEnvironment": "node",
@@ -27,6 +28,7 @@
     "express": "^4.19.2"
   },
   "devDependencies": {
+    "husky": "^9.1.7",
     "jest": "^30.3.0",
     "jest-mock-extended": "^4.0.0",
     "supertest": "^7.2.2"
