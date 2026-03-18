@@ -264,6 +264,19 @@ app.get('/api/deleted-skills', (req, res) => {
   res.json({ deletedSkills: result })
 })
 
+app.get('/api/skills/:name/content', (req, res) => {
+  const { name } = req.params
+  const dirs = _findSkillDirs()
+  const skillDir = dirs.find(d => path.basename(d) === name)
+  if (!skillDir) return res.status(404).json({ error: '未找到 skill: ' + name })
+  try {
+    const content = fs.readFileSync(path.join(skillDir, 'SKILL.md'), 'utf8')
+    res.json({ ok: true, name, content, path: skillDir })
+  } catch (err) {
+    res.status(500).json({ error: err.message })
+  }
+})
+
 app.post('/api/skills/:name/restore', (req, res) => {
   const { name } = req.params
   if (!DELETED_SKILLS.has(name)) return res.status(404).json({ error: `"${name}" 不在已删除列表中` })

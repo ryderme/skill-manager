@@ -319,6 +319,35 @@
 
     .empty { text-align: center; padding: 48px; color: var(--muted); }
     .loading { text-align: center; padding: 48px; color: var(--muted); }
+
+    /* Skill detail drawer */
+    .drawer-overlay {
+      position: fixed; inset: 0; background: rgba(0,0,0,0.4); z-index: 300;
+      opacity: 0; pointer-events: none; transition: opacity 0.2s;
+    }
+    .drawer-overlay.show { opacity: 1; pointer-events: auto; }
+    .drawer {
+      position: fixed; top: 0; right: -500px; width: 480px; max-width: 90vw; height: 100vh;
+      background: var(--surface); border-left: 1px solid var(--border);
+      display: flex; flex-direction: column; z-index: 301; transition: right 0.25s ease; overflow: hidden;
+    }
+    .drawer.show { right: 0; }
+    .drawer-header {
+      padding: 16px 20px; border-bottom: 1px solid var(--border);
+      display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-shrink: 0;
+    }
+    .drawer-title { font-size: 15px; font-weight: 600; }
+    .drawer-meta { font-size: 11px; color: var(--muted); margin-top: 4px; font-family: monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 380px; }
+    .drawer-body { padding: 16px 20px; overflow-y: auto; flex: 1; }
+    .drawer-body h1 { font-size: 16px; font-weight: 600; margin: 0 0 12px; color: var(--accent); border-bottom: 1px solid var(--border); padding-bottom: 8px; }
+    .drawer-body h2 { font-size: 14px; font-weight: 600; margin: 16px 0 8px; }
+    .drawer-body h3 { font-size: 13px; font-weight: 600; margin: 12px 0 6px; color: var(--muted); }
+    .drawer-body pre { background: var(--surface2); border: 1px solid var(--border); border-radius: 6px; padding: 10px 12px; margin: 8px 0; overflow-x: auto; }
+    .drawer-body pre code { background: none; padding: 0; font-size: 11px; font-family: monospace; white-space: pre-wrap; word-break: break-all; color: #a5b4fc; }
+    .drawer-body code { background: var(--surface2); padding: 1px 5px; border-radius: 3px; font-size: 11px; font-family: monospace; }
+    .drawer-body p { font-size: 13px; line-height: 1.6; margin: 0 0 8px; }
+    .drawer-body ul, .drawer-body ol { padding-left: 20px; margin: 0 0 8px; }
+    .drawer-body li { font-size: 13px; line-height: 1.6; }
     .spinner {
       display: inline-block; width: 18px; height: 18px;
       border: 2px solid var(--border); border-top-color: var(--accent);
@@ -340,8 +369,9 @@
   <input class="search" type="text" id="search" placeholder="搜索 skill..." oninput="render()">
   <div class="filter-tabs">
     <button class="filter-tab active" onclick="setFilter('all', this)">全部</button>
-    <button class="filter-tab" onclick="setFilter('incomplete', this)">未完整链接</button>
-    <button class="filter-tab" onclick="setFilter('missing', this)">全部缺失</button>
+    <button class="filter-tab" onclick="setFilter('linked', this)">已全链接</button>
+    <button class="filter-tab" onclick="setFilter('partial', this)">部分链接</button>
+    <button class="filter-tab" onclick="setFilter('unlinked', this)">全部缺失</button>
   </div>
   <div style="flex:1"></div>
   <button class="btn primary" onclick="syncAll()"><span class="spinner" id="sync-spinner" style="display:none"></span>⟳ 全量同步</button>
@@ -387,6 +417,18 @@
   </div>
 </div>
 
+<div class="drawer-overlay" id="drawer-overlay" onclick="closeDrawer()"></div>
+<div class="drawer" id="skill-drawer">
+  <div class="drawer-header">
+    <div style="min-width:0;flex:1">
+      <div class="drawer-title" id="drawer-title"></div>
+      <div class="drawer-meta" id="drawer-meta"></div>
+    </div>
+    <button class="modal-close" onclick="closeDrawer()">✕</button>
+  </div>
+  <div class="drawer-body" id="drawer-body"></div>
+</div>
+
 <script>
 let skills = []
 let tools = []
@@ -400,6 +442,8 @@ let collapsed = {}
 let selectedSkills = new Set()
 let toastTimer = null
 let ctxMenu = null
+let renderedGroups = new Map()
+let currentList = []
 
 async function load() {
   try {
@@ -463,8 +507,9 @@ function render() {
 
   let list = skills.filter(s => s.name.toLowerCase().includes(q) || s.group.toLowerCase().includes(q) || (s.description && s.description.toLowerCase().includes(q)))
 
-  if (filter === 'incomplete') list = list.filter(s => tools.some(t => s.status[t] === 'missing' || s.status[t] === 'wrong'))
-  else if (filter === 'missing') list = list.filter(s => tools.every(t => s.status[t] === 'missing' || s.status[t] === 'blocked'))
+  if (filter === 'linked') list = list.filter(s => tools.every(t => s.status[t] === 'linked'))
+  else if (filter === 'partial') list = list.filter(s => tools.some(t => s.status[t] === 'linked') && !tools.every(t => s.status[t] === 'linked'))
+  else if (filter === 'unlinked') list = list.filter(s => tools.every(t => s.status[t] !== 'linked'))
 
   if (activeGroup) list = list.filter(s => s.group === activeGroup)
 
@@ -480,6 +525,8 @@ function render() {
   }
 
   const grouped = groupSkills(list)
+  renderedGroups = grouped
+  currentList = list
   const toolHeaders = tools.map(t => {
     const isBlockedAll = toolRules[t]?.blockAll
     return `<th class="tool-col" oncontextmenu="showToolCtxMenu(event,'${t}')" style="cursor:pointer" title="右键管理 ${t} 全局规则">${isBlockedAll ? '🔒 ' : ''}${t}</th>`
@@ -494,10 +541,15 @@ function render() {
     const badgeText = standalone ? '独立' : `${groupSkills.length} 个 skill`
     const allLinked = groupSkills.every(s => tools.every(t => s.status[t] === 'linked'))
     const anyMissing = groupSkills.some(s => tools.some(t => s.status[t] === 'missing'))
+    const groupAllSelected = groupSkills.length > 0 && groupSkills.every(s => selectedSkills.has(s.name))
 
     // 分组标题行
-    tbody += `<tr class="group-row" onclick="toggleGroup('${esc(group)}')" oncontextmenu="showGroupCtxMenu(event,'${esc(group)}')">
-      <td colspan="${colspan}">
+    tbody += `<tr class="group-row" oncontextmenu="showGroupCtxMenu(event,'${esc(group)}')">
+      <td style="width:28px;text-align:center;padding:0 4px" onclick="event.stopPropagation()">
+        <input type="checkbox" data-group-cb="${esc(group)}" ${groupAllSelected ? 'checked' : ''}
+          onchange="toggleSelectGroup('${esc(group)}',this.checked)" title="全选/取消此分组">
+      </td>
+      <td colspan="${colspan - 1}" onclick="toggleGroup('${esc(group)}')">
         <div class="group-row-inner">
           <span class="group-row-name">${esc(group)}</span>
           <span class="group-header-badge ${badgeClass}">${badgeText}</span>
@@ -525,7 +577,7 @@ function render() {
             <input type="checkbox" ${selectedSkills.has(skill.name) ? 'checked' : ''} onchange="toggleSelect('${esc(skill.name)}',this.checked)">
           </td>
           <td oncontextmenu="showSkillCtxMenu(event,'${esc(skill.name)}')">
-            <div class="skill-name">${esc(skill.name)}${hasConflict ? `<span class="conflict-badge" title="名称冲突：存在于多个 skillsDir">⚠ 冲突</span>` : ''}</div>
+            <div class="skill-name" onclick="showSkillDetail('${esc(skill.name)}')" style="cursor:pointer">${esc(skill.name)}${hasConflict ? `<span class="conflict-badge" title="名称冲突：存在于多个 skillsDir">⚠ 冲突</span>` : ''}</div>
             ${skill.description ? `<div class="skill-desc">${esc(skill.description)}</div>` : ''}
           </td>
           ${statusCells}
@@ -537,11 +589,19 @@ function render() {
   document.getElementById('content').innerHTML = `
     <table>
       <thead><tr>
-        <th style="width:28px"><input type="checkbox" title="全选/全不选" onchange="toggleSelectAll(this.checked,list)"></th>
+        <th style="width:28px"><input type="checkbox" title="全选/全不选" onchange="toggleSelectAll(this.checked)"></th>
         <th>Skill</th>${toolHeaders}
       </tr></thead>
       <tbody>${tbody}</tbody>
     </table>`
+  // Sync indeterminate state on group checkboxes (can't be set via HTML attribute)
+  document.querySelectorAll('input[data-group-cb]').forEach(cb => {
+    const grp = cb.dataset.groupCb
+    const gs = renderedGroups.get(grp) || []
+    const any = gs.some(s => selectedSkills.has(s.name))
+    const all = gs.length > 0 && gs.every(s => selectedSkills.has(s.name))
+    cb.indeterminate = any && !all
+  })
   updateBatchBar()
 }
 
@@ -878,9 +938,16 @@ function toggleSelect(name, checked) {
   updateBatchBar()
 }
 
-function toggleSelectAll(checked, list) {
-  if (checked) list.forEach(s => selectedSkills.add(s.name))
+function toggleSelectAll(checked) {
+  if (checked) currentList.forEach(s => selectedSkills.add(s.name))
   else selectedSkills.clear()
+  render()
+}
+
+function toggleSelectGroup(group, checked) {
+  const gs = renderedGroups.get(group) || []
+  if (checked) gs.forEach(s => selectedSkills.add(s.name))
+  else gs.forEach(s => selectedSkills.delete(s.name))
   render()
 }
 
@@ -945,7 +1012,60 @@ async function _doDelete(url, label, count) {
 }
 
 document.addEventListener('click', closeCtxMenu)
-document.addEventListener('keydown', e => { if (e.key === 'Escape') closeCtxMenu() })
+document.addEventListener('keydown', e => { if (e.key === 'Escape') { closeCtxMenu(); closeDrawer() } })
+
+// ── Skill detail drawer ─────────────────────────────────────────────────────
+
+async function showSkillDetail(name) {
+  document.getElementById('drawer-title').textContent = name
+  document.getElementById('drawer-meta').textContent = '加载中...'
+  document.getElementById('drawer-body').innerHTML = '<div class="loading"><span class="spinner"></span>加载中...</div>'
+  document.getElementById('drawer-overlay').classList.add('show')
+  document.getElementById('skill-drawer').classList.add('show')
+  try {
+    const r = await fetch(`/api/skills/${encodeURIComponent(name)}/content`)
+    const d = await r.json()
+    if (!r.ok) { document.getElementById('drawer-body').innerHTML = `<p style="color:var(--red)">${esc(d.error)}</p>`; return }
+    const skill = skills.find(s => s.name === name)
+    document.getElementById('drawer-meta').textContent = skill?.path || ''
+    document.getElementById('drawer-body').innerHTML = renderMarkdown(d.content)
+  } catch (e) {
+    document.getElementById('drawer-body').innerHTML = `<p style="color:var(--red)">加载失败: ${esc(e.message)}</p>`
+  }
+}
+
+function closeDrawer() {
+  document.getElementById('drawer-overlay').classList.remove('show')
+  document.getElementById('skill-drawer').classList.remove('show')
+}
+
+function renderMarkdown(md) {
+  const lines = md.split('\n')
+  let html = '', inCode = false, codeLines = []
+  for (const line of lines) {
+    if (line.startsWith('```')) {
+      if (inCode) { html += `<pre><code>${esc(codeLines.join('\n'))}</code></pre>`; inCode = false; codeLines = [] }
+      else { inCode = true }
+      continue
+    }
+    if (inCode) { codeLines.push(line); continue }
+    const e = esc(line)
+    if (line.startsWith('### '))     html += `<h3>${inlineMd(e.slice(4))}</h3>`
+    else if (line.startsWith('## ')) html += `<h2>${inlineMd(e.slice(3))}</h2>`
+    else if (line.startsWith('# '))  html += `<h1>${inlineMd(e.slice(2))}</h1>`
+    else if (/^[*-] /.test(line))    html += `<li>${inlineMd(e.slice(2))}</li>`
+    else if (line.trim())            html += `<p>${inlineMd(e)}</p>`
+  }
+  if (inCode) html += `<pre><code>${esc(codeLines.join('\n'))}</code></pre>`
+  return html
+}
+
+function inlineMd(s) {
+  return s
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*(.+?)\*/g, '<em>$1</em>')
+    .replace(/`(.+?)`/g, '<code>$1</code>')
+}
 
 async function syncAll() {
   const sp = document.getElementById('sync-spinner')
