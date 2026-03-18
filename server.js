@@ -22,11 +22,17 @@ function loadConfig() {
   const base = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'))
 
   const rawSkillsDir = base.skillsDir ?? '~/github'
-  const skillsDirs = process.env.SKILLS_DIR
-    ? process.env.SKILLS_DIR.split(',').map(s => expandHome(s.trim()))
-    : Array.isArray(rawSkillsDir)
-      ? rawSkillsDir.map(expandHome)
-      : [expandHome(rawSkillsDir)]
+  const rawEntries = process.env.SKILLS_DIR
+    ? process.env.SKILLS_DIR.split(',').map(s => s.trim())
+    : Array.isArray(rawSkillsDir) ? rawSkillsDir : [rawSkillsDir]
+
+  const skillsDirGroups = {}   // expanded path → group name override
+  const skillsDirs = rawEntries.map(entry => {
+    if (typeof entry === 'string') return expandHome(entry)
+    const p = expandHome(entry.path)
+    if (entry.group) skillsDirGroups[p] = entry.group
+    return p
+  })
 
   const tools = {}
   for (const [name, dir] of Object.entries(base.tools || {})) {
@@ -43,17 +49,20 @@ function loadConfig() {
   const rules = base.rules || {}
   const groupRules = base.groupRules || {}
   const toolRules = base.toolRules || {}
+  const deletedSkills = new Set(base.deletedSkills || [])
 
-  return { skillsDirs, tools, excludeProjects, rules, groupRules, toolRules }
+  return { skillsDirs, skillsDirGroups, tools, excludeProjects, rules, groupRules, toolRules, deletedSkills }
 }
 
 let config = loadConfig()
 let SKILLS_DIRS = config.skillsDirs
+let SKILLS_DIR_GROUPS = config.skillsDirGroups
 let TOOLS = config.tools
 let EXCLUDE_PROJECTS = config.excludeProjects
 let RULES = config.rules
 let GROUP_RULES = config.groupRules
 let TOOL_RULES = config.toolRules
+let DELETED_SKILLS = config.deletedSkills
 
 // 判断某个 skill 是否允许链接到某个工具（三级优先级：tool > group > skill）
 function isAllowed(skillName, tool, group) {
@@ -85,6 +94,7 @@ function isAllowed(skillName, tool, group) {
 // 获取 skill 所属的项目组名
 function getSkillGroup(skillDir) {
   const baseDir = SKILLS_DIRS.find(d => skillDir.startsWith(d + path.sep) || skillDir === d) || SKILLS_DIRS[0]
+  if (SKILLS_DIR_GROUPS[baseDir]) return SKILLS_DIR_GROUPS[baseDir]
   const rel = path.relative(baseDir, skillDir)
   return rel.split(path.sep)[0]
 }
@@ -111,6 +121,13 @@ function saveToolRules(toolRules) {
   TOOL_RULES = toolRules
 }
 
+function saveDeletedSkills(deletedSkills) {
+  const raw = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'))
+  raw.deletedSkills = [...deletedSkills]
+  fs.writeFileSync(CONFIG_PATH, JSON.stringify(raw, null, 2) + '\n')
+  DELETED_SKILLS = deletedSkills
+}
+
 // ── 扫描逻辑 ──────────────────────────────────────────────────────────────────
 
 function findSkillDirs() {
@@ -124,7 +141,7 @@ function findSkillDirs() {
 
     const hasSkill = entries.some(e => e.name === 'SKILL.md' && e.isFile())
     if (hasSkill) {
-      skills.push(dir)
+      if (!DELETED_SKILLS.has(path.basename(dir))) skills.push(dir)
       return
     }
 
@@ -237,6 +254,76 @@ app.delete('/api/skills/:name/link', (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message })
   }
+})
+
+// 删除单个 skill（软删：移除软链接+加入 deletedSkills；硬删：同时 rm -rf 真实目录）
+function doDeleteSkill(name, hardDelete) {
+  // 先在 deletedSkills 外找目录（已软删的可能已从扫描中排除，需直接搜）
+  const allDirs = []
+  function walkAll(dir, depth = 0) {
+    if (depth > 5) return
+    let entries
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }) } catch { return }
+    if (entries.some(e => e.name === 'SKILL.md' && e.isFile())) { allDirs.push(dir); return }
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue
+      if (entry.name.startsWith('.') && depth > 0) continue
+      walk(path.join(dir, entry.name), depth + 1)
+    }
+  }
+  for (const d of SKILLS_DIRS) walkAll(d)
+  const skillDir = allDirs.find(d => path.basename(d) === name)
+  if (!skillDir) return { error: '未找到 skill: ' + name }
+
+  // 移除所有软链接
+  const removed = []
+  for (const [tool, toolDir] of Object.entries(TOOLS)) {
+    const target = path.join(toolDir, name)
+    try {
+      if (fs.lstatSync(target).isSymbolicLink()) { fs.unlinkSync(target); removed.push(tool) }
+    } catch {}
+  }
+
+  // 加入 deletedSkills（软删）
+  const deletedSkills = new Set(DELETED_SKILLS)
+  deletedSkills.add(name)
+  saveDeletedSkills(deletedSkills)
+
+  // 硬删除：rm -rf 真实目录
+  if (hardDelete) {
+    try {
+      fs.rmSync(skillDir, { recursive: true, force: true })
+    } catch (err) {
+      return { ok: true, removed, softDeleted: true, hardDeleted: false, hardDeleteError: err.message, path: skillDir }
+    }
+  }
+  return { ok: true, removed, softDeleted: true, hardDeleted: !!hardDelete, path: skillDir }
+}
+
+app.delete('/api/skills/:name', (req, res) => {
+  const { name } = req.params
+  const { hardDelete } = req.body || {}
+  const result = doDeleteSkill(name, hardDelete)
+  if (result.error) return res.status(404).json(result)
+  res.json(result)
+})
+
+// 删除整组 skill
+app.delete('/api/groups/:group', (req, res) => {
+  const { group } = req.params
+  const { hardDelete } = req.body || {}
+
+  const dirs = findSkillDirs()
+  const groupDirs = dirs.filter(d => getSkillGroup(d) === group)
+  if (groupDirs.length === 0) return res.status(404).json({ error: `未找到组: ${group}` })
+
+  const results = []
+  for (const skillDir of groupDirs) {
+    const name = path.basename(skillDir)
+    results.push({ name, ...doDeleteSkill(name, hardDelete) })
+  }
+
+  res.json({ ok: true, count: results.length, hardDeleted: !!hardDelete, results })
 })
 
 // 设置规则（block/unblock）

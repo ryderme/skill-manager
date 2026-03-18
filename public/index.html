@@ -437,7 +437,7 @@ function render() {
 
   let tbody = ''
   for (const [group, groupSkills] of grouped) {
-    const isCollapsed = collapsed[group]
+    const isCollapsed = collapsed[group] !== false
     const standalone = groupSkills[0]?.standalone
     const badgeClass = standalone ? 'badge-standalone' : 'badge-collection'
     const badgeText = standalone ? '独立' : `${groupSkills.length} 个 skill`
@@ -464,12 +464,12 @@ function render() {
           return `<td class="tool-cell"><span class="status-badge ${st}"
             onclick="toggleLink('${esc(skill.name)}','${esc(skill.group)}','${tool}','${st}')"
             oncontextmenu="showCtxMenu(event,'${esc(skill.name)}','${esc(skill.group)}','${tool}','${st}')"
-            title="${getTitle(st, skill.name, skill.group, tool)}">
+            title="${esc(getTitle(st, skill.name, skill.group, tool))}">
             <span class="dot"></span>${getLabel(st, skill.name, skill.group, tool)}
           </span></td>`
         }).join('')
         return `<tr>
-          <td>
+          <td oncontextmenu="showSkillCtxMenu(event,'${esc(skill.name)}','${esc(skill.path)}')">
             <div class="skill-name">${esc(skill.name)}</div>
             ${skill.description ? `<div class="skill-desc">${esc(skill.description)}</div>` : ''}
           </td>
@@ -503,7 +503,7 @@ function renderSidebar(filteredSkills) {
 }
 
 function toggleGroup(group) {
-  collapsed[group] = !collapsed[group]
+  collapsed[group] = collapsed[group] === false ? true : false
   render()
 }
 
@@ -537,7 +537,7 @@ function getTitle(st, name, group, tool) {
   if (st === 'blocked') {
     const level = getBlockLevel(name, group, tool)
     if (level === 'tool') return `${tool} 全局屏蔽中，点击为此 skill 开白名单 | 右键更多`
-    if (level === 'group') return `项目组 "${group}" 屏蔽了 ${tool}，右键管理`
+    if (level === 'group') return `项目组 [${group}] 屏蔽了 ${tool}，右键管理`
     return `已屏蔽：${name} 不允许链接到 ${tool}，点击解除`
   }
   const inAllowList = isToolAllowed(name, group, tool)
@@ -624,6 +624,19 @@ async function setToolRule(tool, blockAll) {
   await load()
 }
 
+function showSkillCtxMenu(e, name, skillPath) {
+  e.preventDefault()
+  e.stopPropagation()
+  const menu = document.getElementById('ctx-menu')
+  let html = `<div style="padding:6px 12px 4px;font-size:11px;color:var(--muted);font-weight:600">${esc(name)}</div>`
+  html += `<div class="ctx-sep"></div>`
+  html += `<div class="ctx-item danger" onclick="closeCtxMenu();confirmDeleteSkill('${esc(name)}','${esc(skillPath)}')">🗑 删除 skill</div>`
+  menu.innerHTML = html
+  menu.style.left = Math.min(e.clientX, window.innerWidth - 200) + 'px'
+  menu.style.top = Math.min(e.clientY, window.innerHeight - 100) + 'px'
+  menu.classList.add('show')
+}
+
 function showCtxMenu(e, name, group, tool, status) {
   e.preventDefault()
   e.stopPropagation()
@@ -690,6 +703,8 @@ function showGroupCtxMenu(e, group) {
       html += `<div class="ctx-item danger" onclick="closeCtxMenu();confirmBlockGroup('${esc(group)}','${tool}')">🔒 屏蔽 → ${tool}</div>`
     }
   }
+  html += `<div class="ctx-sep"></div>`
+  html += `<div class="ctx-item danger" onclick="closeCtxMenu();confirmDeleteGroup('${esc(group)}')">🗑 删除整组</div>`
   menu.innerHTML = html
   menu.style.left = Math.min(e.clientX, window.innerWidth - 200) + 'px'
   menu.style.top = Math.min(e.clientY, window.innerHeight - 160) + 'px'
@@ -741,6 +756,34 @@ async function confirmBlockTool(tool) {
   await setToolRule(tool, true)
 }
 
+async function confirmDeleteSkill(name, skillPath) {
+  if (!confirm(`删除 skill "${name}"？\n\n将移除所有软链接，skill 从列表中消失。\n本地文件暂不删除。`)) return
+  await _doDelete(`/api/skills/${encodeURIComponent(name)}`, `"${name}"`, skillPath)
+}
+
+async function confirmDeleteGroup(group) {
+  const count = skills.filter(s => s.group === group).length
+  if (!confirm(`删除整组 "${group}"？\n\n共 ${count} 个 skill，将全部移除软链接并从列表消失。\n本地文件暂不删除。`)) return
+  await _doDelete(`/api/groups/${encodeURIComponent(group)}`, `"${group}" 组`, null, count)
+}
+
+async function _doDelete(url, label, localPath, count) {
+  const r = await fetch(url, { method: 'DELETE', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ hardDelete: false }) })
+  const d = await r.json()
+  if (!r.ok) { toast(d.error || '删除失败', 'err'); return }
+  toast(`已删除 ${label}${count ? `（${count} 个 skill）` : ''}`)
+  await load()
+
+  const pathInfo = localPath || (d.results?.map(r => r.path).join('\n') || '')
+  if (confirm(`是否同时删除本地文件？\n\n${pathInfo}\n\n⚠️ 此操作不可恢复！`)) {
+    const r2 = await fetch(url, { method: 'DELETE', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ hardDelete: true }) })
+    const d2 = await r2.json()
+    if (d2.hardDeleted || d2.results?.some(r=>r.hardDeleted)) toast(`本地文件已删除`)
+    else toast((d2.hardDeleteError || d2.results?.[0]?.hardDeleteError) || '本地文件删除失败', 'err')
+    await load()
+  }
+}
+
 document.addEventListener('click', closeCtxMenu)
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeCtxMenu() })
 
@@ -781,7 +824,7 @@ function toast(msg, type='ok') {
   toastTimer = setTimeout(() => el.classList.remove('show'), 3000)
 }
 function esc(s) {
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/'/g,'&#39;')
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/'/g,'&#39;').replace(/"/g,'&quot;')
 }
 
 load()
