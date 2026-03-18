@@ -108,7 +108,12 @@ function getSkillStatus(skillDir) {
     if (description.length > 80) description = description.slice(0, 77) + '...'
   } catch {}
 
-  return { name, path: skillDir, description, status }
+  // 分组：相对于 GITHUB_DIR 的第一级目录名
+  const rel = path.relative(GITHUB_DIR, skillDir)
+  const group = rel.split(path.sep)[0]
+  const standalone = group === path.basename(skillDir) // 项目本身就是 skill
+
+  return { name, path: skillDir, description, status, group, standalone }
 }
 
 // ── API ───────────────────────────────────────────────────────────────────────
