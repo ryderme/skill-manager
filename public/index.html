@@ -213,7 +213,11 @@
     .group-toggle { color: var(--muted); font-size: 11px; margin-left: auto; transition: transform 0.2s; display: inline-block; }
     .group-toggle.collapsed { transform: rotate(-90deg); }
 
-    .skill-name { font-weight: 500; color: var(--text); font-size: 13px; }
+    .skill-row td { border-left: none; }
+    .skill-row td:nth-child(2) { padding-left: 20px; }
+    .skill-row:hover td { background: var(--surface); }
+
+    .skill-name { font-weight: 400; color: var(--text); font-size: 12px; }
     .skill-desc {
       font-size: 11px;
       color: var(--muted);
@@ -539,7 +543,7 @@ function render() {
 
   let tbody = ''
   for (const [group, groupSkills] of grouped) {
-    const isCollapsed = collapsed[group] !== false
+    const isCollapsed = activeGroup === group ? false : collapsed[group] !== false
     const standalone = groupSkills[0]?.standalone
     const badgeClass = standalone ? 'badge-standalone' : 'badge-collection'
     const badgeText = standalone ? '独立' : `${groupSkills.length} 个 skill`
@@ -576,7 +580,7 @@ function render() {
           </span></td>`
         }).join('')
         const hasConflict = !!nameConflicts[skill.name]
-        return `<tr>
+        return `<tr class="skill-row">
           <td style="width:28px;text-align:center;padding:0 4px">
             <input type="checkbox" ${selectedSkills.has(skill.name) ? 'checked' : ''} onchange="toggleSelect('${esc(skill.name)}',this.checked)">
           </td>
