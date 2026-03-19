@@ -143,7 +143,9 @@
     }
     .group-item:hover { background: var(--surface); color: var(--text); }
     .group-item.active { background: var(--surface2); color: var(--text); border-left: 2px solid var(--accent); }
-    .group-item-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .group-item-inner { flex: 1; overflow: hidden; }
+    .group-item-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .group-item-path { font-size: 10px; color: var(--muted); opacity: 0.6; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 1px; }
     .group-count {
       font-size: 10px;
       background: var(--surface2);
@@ -615,8 +617,12 @@ function renderSidebar(filteredSkills) {
     <span class="group-count">${filteredSkills.length}</span>
   </div>`
   for (const [group, gs] of grouped) {
+    const groupPath = gs[0]?.path ? gs[0].path.substring(0, gs[0].path.lastIndexOf('/')).replace(/^\/home\/[^/]+/, '~') : ''
     html += `<div class="group-item ${activeGroup === group ? 'active' : ''}" onclick="setActiveGroup('${esc(group)}')">
-      <span class="group-item-name">${esc(group)}</span>
+      <div class="group-item-inner">
+        <div class="group-item-name">${esc(group)}</div>
+        ${groupPath ? `<div class="group-item-path" title="${esc(groupPath)}">${esc(groupPath)}</div>` : ''}
+      </div>
       <span class="group-count">${gs.length}</span>
     </div>`
   }
